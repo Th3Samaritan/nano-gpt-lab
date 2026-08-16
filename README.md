@@ -50,8 +50,10 @@ python scripts/analyze.py --dataset shakespeare --size nano
 
 ### Colab
 
-1. Open `notebooks/colab_kaggle_lab.ipynb` in Colab.
-2. Zip the whole repo → upload it in cell 1 (`nano-gpt-lab.zip`).
+1. Open `notebooks/colab_kaggle_lab.ipynb` in Colab
+   (File → Open notebook → GitHub tab → `Th3Samaritan/nano-gpt-lab`).
+2. Run the cells. The notebook fetches the repo itself via `git clone`
+   (zipball fallback) - no zip upload needed.
 3. Cell 4: set `SIZE = "gpt2"`, `STEPS = 2000`; run the comparison.
 4. Checkpoints + logs + charts are mirrored to
    `/content/drive/MyDrive/nano-gpt-lab/` every checkpoint interval (Drive
@@ -60,11 +62,25 @@ python scripts/analyze.py --dataset shakespeare --size nano
 
 ### Kaggle
 
-1. Zip the whole repo and add it as a **Dataset** input.
-2. Open `notebooks/colab_kaggle_lab.ipynb` as a Kaggle notebook, attach the
-   dataset, enable the T4 GPU, and run.
+1. Create a notebook, attach GPU T4, and paste
+   `notebooks/colab_kaggle_lab.ipynb`'s content (or upload the .ipynb).
+2. Run: the notebook `git clone`s the repo into `/kaggle/working`
+   (Kaggle notebooks have internet; no Dataset input needed).
 3. Everything lands in `/kaggle/working/nano-gpt-lab/` - persisted to your
    Kaggle account automatically as the notebook output.
+
+### GitHub
+
+Repository: https://github.com/Th3Samaritan/nano-gpt-lab
+
+```bash
+# after changing code on the ZBook:
+cd nano-gpt-lab
+git add -A && git commit -m "describe the change" && git push
+
+# on Colab/Kaggle, pull the update before a new session:
+git pull origin main
+```
 
 ---
 
@@ -201,6 +217,24 @@ Notebooks: `01_attention_from_scratch`, `02_rope_from_scratch`,
 4. Every observation goes into the report template: hypothesis → setup →
    result → why you expected it → what happened → limitation → next
    experiment (plan section 32).
+
+### First ZBook result (interim - 250 steps, nano, seed 42)
+
+| Variant | Best val loss | PPL |
+|---|---|---|
+| A vanilla+learned | 6.306 | 548 |
+| B vanilla+RoPE | **6.185** | **485** |
+| C flash+learned | 6.306 | 548 |
+| D flash+RoPE | **6.185** | **485** |
+
+Two clean findings, exactly what first principles predict:
+1. Flash == vanilla bit-for-bit (6.306 vs 6.306) - the fused kernels
+   change nothing about quality, only speed/memory.
+2. RoPE beats the learned position table by 0.12 loss (~2%) at equal
+   tokens, with 65k fewer parameters.
+
+Caveats: one seed, CPU fp32, 2M tokens, tiny model. The T4 `gpt2` runs
+(2000+ steps, seeds 42/123/2026) are the real experiment.
 
 ## Roadmap (from the plan, section 36)
 

@@ -48,10 +48,20 @@ def _read_metrics(metrics_csv: str) -> dict:
             out["rows"] += 1
             if out["best_val_loss"] is None or val < out["best_val_loss"]:
                 out["best_val_loss"] = val
+            # Each field parses independently: rows may legitimately carry
+            # blank cells (e.g. the final row has no train_loss), and one
+            # blank field must never discard the others.
+            for key in ("tokens_seen",):
+                try:
+                    out["last_tokens_seen"] = int(row[key])
+                except (ValueError, KeyError):
+                    pass
             try:
                 out["final_tokens_per_sec"] = float(row["tokens_per_sec"])
+            except (ValueError, KeyError):
+                pass
+            try:
                 out["peak_gpu_mem_mb"] = float(row["gpu_mem_mb"])
-                out["last_tokens_seen"] = int(row["tokens_seen"])
             except (ValueError, KeyError):
                 pass
     return out
