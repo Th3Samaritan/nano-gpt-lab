@@ -11,7 +11,7 @@ WHY
 Per the plan (section 4) this dataset exists to verify the whole pipeline,
 debug the transformer, and run rapid A/B/C/D architecture experiments -
 not for benchmark quality. It is small enough to prepare in seconds on a
-CPU, which makes it the default dataset for the LOCAL ZBook tier.
+CPU, which makes it the default dataset for the local-machine tier.
 
 WHERE
 -----

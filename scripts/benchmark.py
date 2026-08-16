@@ -20,7 +20,7 @@ PROVE it before a long run.
 WHERE
 ----
     python scripts/benchmark.py --dataset shakespeare --exp exp_d_flash_rope --size gpt2
-Run it on the T4 before starting scaled training; on the ZBook it gives
+Run it on the T4 before starting scaled training; on the local machine it gives
 CPU-relative timings (memory column is 0 without CUDA).
 """
 from __future__ import annotations
@@ -36,20 +36,25 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import torch  # noqa: E402
+import torch.nn.functional as F  # noqa: E402
 
 from src.model.gpt import GPT, GPTConfig  # noqa: E402
 from src.training.precision import PrecisionContext  # noqa: E402
 from src.training.trainer import TokenDataLoader, _ensure_data  # noqa: E402
 from src.utils.config import build_run_config, load_dataset_config  # noqa: E402
 from src.utils.device import get_autocast_dtype, get_device, peak_memory_mb, \
-    reset_peak_memory  # noqa: E402
+    reset_peak_memory, resolve_device_ids, wrap_parallel  # noqa: E402
 
 
 def bench_combo(model_cfg, precision, batch: int, block: int, data: dict,
                 device: str, steps: int = 4):
-    """Time avg step + peak memory for one (micro_batch, block) combo."""
+    """Time avg step + peak memory for one (micro_batch, block) combo.
+
+    The model is wrapped for multi-GPU (Kaggle T4x2) exactly like the
+    trainer, so the measured throughput is what a real run would get."""
     model = GPT(model_cfg).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    model, base = wrap_parallel(model, resolve_device_ids("auto"))
+    optimizer = torch.optim.AdamW(base.parameters(), lr=1e-4)
     loader = TokenDataLoader(data["train_bin"], block, batch,
                              data.get("token_dtype", "uint16"))
     reset_peak_memory()
@@ -62,7 +67,10 @@ def bench_combo(model_cfg, precision, batch: int, block: int, data: dict,
             optimizer.zero_grad(set_to_none=True)
             t0 = time.time()
             with precision.autocast_ctx:
-                _, loss = model(x, y)
+                out = model(x)
+                logits = out[0] if isinstance(out, tuple) else out
+                loss = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)), y.view(-1))
             precision.backward(loss)
             optimizer.step()
             if device == "cuda":
@@ -98,7 +106,9 @@ def main() -> None:
         rope_base=cfg.get("rope_base", 10000.0),
         flash_tile_size=cfg.get("flash_tile_size", 64))
 
-    print(f"scan: {args.exp} @ {size} | device={device}")
+    ids = resolve_device_ids("auto")
+    print(f"scan: {args.exp} @ {size} | device={device} "
+          f"| gpus={len(ids) if ids else 0}")
     print(f"{'micro_batch':>11} {'block':>6} {'step_s':>8} {'tok/s':>9} "
           f"{'peakMB':>8}")
     results = []

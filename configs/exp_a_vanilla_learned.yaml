@@ -11,7 +11,7 @@ position: learned             # wte + wpe table (GPT-2 baseline)
 
 # ---- shared training recipe (identical across A/B/C/D) ---------------
 # Architecture + batch/lr values come from the --size preset
-# (nano on the ZBook, gpt2 on T4). These knobs are the SAME for every
+# (nano on the local machine, gpt2 on T4). These knobs are the SAME for every
 # experiment so they cannot explain any measured difference.
 dropout: 0.0
 bias: true

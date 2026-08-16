@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------
 # TinyStories - Dataset 2 (natural language transfer test)
-# Intended for the Colab/Kaggle T4 tier; on the ZBook override
+# Intended for the Colab/Kaggle T4 tier; on the local machine override
 # train_limit_chars: 2000000 to keep preparation fast.
 # ------------------------------------------------------------------
 dataset: tinystories

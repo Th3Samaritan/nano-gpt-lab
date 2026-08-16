@@ -11,7 +11,7 @@ Runs one experiment (or the full A/B/C/D comparison) on one dataset:
 
 WHERE
 ----
-Local ZBook tier : --size nano (default) - fast, CPU-friendly.
+local-machine tier : --size nano (default) - fast, CPU-friendly.
 Colab/Kaggle T4  : --size gpt2 (or small) - the scaled tier.
 Outputs: runs/{dataset}/{attention}_{position}_{size}_{seed}/ and, after a
 comparison, results/{dataset}/ with the layman PNG suite + comparison.json.
@@ -58,6 +58,8 @@ def main() -> None:
                         help="seeds to run (plan: 42 123 2026)")
     parser.add_argument("--steps", type=int, default=None,
                         help="override max_steps (quick experiments)")
+    parser.add_argument("--devices", default="auto",
+                        help="GPUs to use: 'auto' (all), 1, or 2 (Kaggle T4x2)")
     parser.add_argument("--resume", action="store_true",
                         help="resume each run from its latest.pt")
     parser.add_argument("--threshold", type=float, default=2.0,
@@ -77,6 +79,10 @@ def main() -> None:
         overrides = {}
         if args.steps is not None:
             overrides["max_steps"] = args.steps
+        try:
+            overrides["devices"] = int(args.devices)
+        except ValueError:
+            overrides["devices"] = args.devices  # "auto"
         # Resolve the size preset: explicit --size wins, else the dataset's
         # yaml default (nano for shakespeare, gpt2 for the T4-tier datasets).
         for seed in args.seeds:

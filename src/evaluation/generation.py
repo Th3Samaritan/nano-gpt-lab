@@ -22,7 +22,6 @@ from typing import Optional
 import torch
 
 from src.tokenizer.bpe import BPETokenizer
-from src.utils.device import get_device
 
 
 def generate_text(
@@ -34,14 +33,22 @@ def generate_text(
     top_p: Optional[float] = None,
     max_new_tokens: int = 200,
 ) -> str:
-    """One sample with identical settings across experiments. Returns text."""
-    device = get_device()
-    ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-    model.eval()
-    out = model.generate(
+    """One sample with identical settings across experiments. Returns text.
+
+    The model may be DataParallel-wrapped (multi-GPU runs): sampling runs
+    on the base GPT so the wrapper's batch-splitting semantics never touch
+    autoregressive generation (generation is strictly sequential).
+    """
+    from src.utils.device import get_base_gpt
+    base = get_base_gpt(model)
+    device = next(base.parameters()).device
+    ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long,
+                       device=device)
+    base.eval()
+    out = base.generate(
         ids, max_new_tokens=max_new_tokens, temperature=temperature,
         top_k=top_k, top_p=top_p)
-    model.train()
+    base.train()
     return tokenizer.decode(out[0].tolist())
 
 

@@ -206,6 +206,8 @@ def collect_environment() -> dict:
         info["torch_version"] = torch.__version__
         info["cuda_available"] = bool(torch.cuda.is_available())
         info["cuda_version"] = torch.version.cuda
+        info["gpu_count"] = (torch.cuda.device_count()
+                             if torch.cuda.is_available() else 0)
         if torch.cuda.is_available():
             info["gpu_name"] = torch.cuda.get_device_name(0)
             info["gpu_vram_gb"] = round(
@@ -246,11 +248,14 @@ def print_environment() -> None:
     info = collect_environment()
     gpu = info.get("gpu_name", info.get("accelerator", "unknown"))
     vram = info.get("gpu_vram_gb", "n/a")
+    n_gpu = info.get("gpu_count", 0)
+    gpu_line = f"  accelerator   : {gpu} (VRAM {vram} GB)"
+    if n_gpu > 1:
+        gpu_line += f" x{n_gpu}"
     print("=" * 72)
     print("nano-gpt-lab environment")
     print(f"  platform      : {info['platform']}")
-    print(f"  accelerator   : {gpu} (VRAM {vram} GB)" if vram != "n/a"
-          else f"  accelerator   : {gpu}")
+    print(gpu_line)
     print(f"  torch         : {info.get('torch_version', 'n/a')}"
           f" | cuda {info.get('cuda_version', 'n/a')}")
     print(f"  python        : {info['python_version']}")

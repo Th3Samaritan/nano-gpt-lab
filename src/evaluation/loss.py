@@ -20,6 +20,7 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.utils.device import get_device
 
@@ -30,7 +31,13 @@ def estimate_loss(
     precision,
     eval_iters: int,
 ) -> float:
-    """Mean loss over eval_iters batches from the given split's get_batch."""
+    """Mean loss over eval_iters batches from the given split's get_batch.
+
+    The loss is computed OUTSIDE the model (logits -> cross-entropy here):
+    that makes the estimator identical for a plain GPT and for the
+    multi-GPU DataParallel wrapper (which returns gathered logits), so the
+    evaluation procedure cannot differ between the two setups.
+    """
     device = get_device()
     model.eval()
     losses = torch.zeros(eval_iters, device="cpu")
@@ -39,7 +46,12 @@ def estimate_loss(
             x, y = get_batch()
             x, y = x.to(device), y.to(device)
             with precision.autocast_ctx:
-                _, loss = model(x, y)
-            losses[k] = loss.item() if loss is not None else float("nan")
+                out = model(x)
+                # plain GPT returns (logits, None); DP wrapper returns
+                # logits directly - accept both shapes of output.
+                logits = out[0] if isinstance(out, tuple) else out
+                loss = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)), y.view(-1))
+            losses[k] = loss.item()
     model.train()  # restore train mode: dropout must behave consistently
     return float(losses.mean().item())

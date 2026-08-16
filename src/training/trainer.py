@@ -42,6 +42,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from src.model.gpt import GPT, GPTConfig
 from src.evaluation.generation import generate_text
@@ -55,8 +56,8 @@ from src.utils.checkpoint import (
     find_latest_checkpoint, load_checkpoint, save_checkpoint)
 from src.utils.config import save_yaml
 from src.utils.device import (
-    get_autocast_dtype, get_device, gpu_peak_flops, peak_memory_mb,
-    reset_peak_memory)
+    get_autocast_dtype, get_base_gpt, get_device, gpu_peak_flops,
+    peak_memory_mb, reset_peak_memory, resolve_device_ids, wrap_parallel)
 from src.utils.environment import (
     runs_dir, sync_run_to_drive, write_environment_file)
 from src.utils.logging import RunLogger, plot_loss_curves
@@ -132,6 +133,13 @@ def train(config: dict, resume: bool = False) -> dict:
     """
     device = get_device()
     dtype = get_autocast_dtype(device)
+    # Multi-GPU (Kaggle T4x2): resolve ONCE, record it in the saved config
+    # so the run is reproducible, and wrap the model AFTER the optimizer is
+    # built (DataParallel replicas share the base parameters - the
+    # optimizer must hold references to the base module's params).
+    device_ids = resolve_device_ids(config.get("devices", "auto"))
+    config = dict(config)
+    config["devices_used"] = [int(d) for d in device_ids] if device_ids else ["cpu"]
     run_dir = run_dir_for(config)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -169,6 +177,7 @@ def train(config: dict, resume: bool = False) -> dict:
     logger.log(model.model_summary().replace("\n", " | "))
 
     # ---- optimizer / scheduler / precision ------------------------------
+    # Built from the BASE model before wrapping (see device_ids note above).
     optimizer = create_optimizer(
         model, config.get("weight_decay", 0.1),
         config["learning_rate"], tuple(config.get("betas", [0.9, 0.95])), device)
@@ -177,13 +186,14 @@ def train(config: dict, resume: bool = False) -> dict:
         config.get("decay_steps") or config["max_steps"],
         config.get("min_learning_rate", config["learning_rate"] * 0.1))
     precision = PrecisionContext(device, dtype)
+    model, base_gpt = wrap_parallel(model, device_ids)
 
     # ---- resume (plan section 26: full state, exact continuation) -------
     start_step, tokens_seen, best_val_loss, last_val_loss = 0, 0, float("inf"), float("inf")
     if resume:
         latest = find_latest_checkpoint(run_dir)
         if latest is not None:
-            state = load_checkpoint(latest, model, optimizer, scheduler, precision)
+            state = load_checkpoint(latest, base_gpt, optimizer, scheduler, precision)
             start_step, tokens_seen = state["step"], state["tokens_seen"]
             best_val_loss = state.get("best_val_loss", float("inf"))
             logger.log(f"resumed from {os.path.basename(latest)} at step {start_step}")
@@ -199,7 +209,8 @@ def train(config: dict, resume: bool = False) -> dict:
     val_loader = TokenDataLoader(data["val_bin"], block, micro, token_dtype)
     logger.log(
         f"micro_batch={micro} accum={accum} effective_tokens/step={eff_tokens} "
-        f"precision={dtype or 'fp32'} device={device}")
+        f"precision={dtype or 'fp32'} device={device}"
+        f"{' x' + str(len(device_ids)) if len(device_ids) > 1 else ''}")
 
     # ---- eval / sample parameters (identical for every variant) ---------
     eval_cfg = config.get("eval", {})
@@ -229,7 +240,14 @@ def train(config: dict, resume: bool = False) -> dict:
             x, y = train_loader.get_batch()
             x, y = x.to(device), y.to(device)
             with precision.autocast_ctx:
-                _, loss = model(x, y)
+                # Loss computed OUTSIDE the model: the plain GPT returns
+                # (logits, None) and the DataParallel wrapper returns
+                # gathered logits - one code path, one semantics, so
+                # multi-GPU runs are comparable with single-GPU runs.
+                out = model(x)
+                logits = out[0] if isinstance(out, tuple) else out
+                loss = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)), y.view(-1))
             loss = loss / accum          # mean over the effective batch
             precision.backward(loss)
             lossf += loss.item() * accum
@@ -248,8 +266,9 @@ def train(config: dict, resume: bool = False) -> dict:
             best_val_loss = min(best_val_loss, val_loss)
             elapsed = time.time() - t_total0
             tok_per_sec = tokens_seen / max(elapsed, 1e-6)
-            mfu = (model.flops_per_token() * eff_tokens / max(dt, 1e-6)
-                   / gpu_peak_flops(device)) if device == "cuda" else 0.0
+            n_gpus = max(len(device_ids), 1)
+            mfu = (base_gpt.flops_per_token() * eff_tokens / max(dt, 1e-6)
+                   / (gpu_peak_flops(device) * n_gpus)) if device == "cuda" else 0.0
             row = {
                 "step": step + 1, "tokens_seen": tokens_seen,
                 "train_loss": round(train_loss, 4),
@@ -279,8 +298,10 @@ def train(config: dict, resume: bool = False) -> dict:
 
         # ---- periodic checkpointing (+ Drive mirror on Colab) -----------
         if (step + 1) % checkpoint_interval == 0 or (step + 1) == max_steps:
+            # Checkpoints store the BASE model (no DataParallel 'module.'
+            # prefixes), so any run loads them regardless of GPU count.
             save_checkpoint(
-                os.path.join(run_dir, "latest.pt"), model, optimizer,
+                os.path.join(run_dir, "latest.pt"), base_gpt, optimizer,
                 scheduler, precision, step + 1, tokens_seen, config,
                 best_val_loss, is_best=(best_val_loss == last_val_loss))
             sync_run_to_drive(run_dir, full=True)
@@ -303,7 +324,7 @@ def train(config: dict, resume: bool = False) -> dict:
         "gpu_mem_mb": round(peak_memory_mb(), 1), "grad_norm": "",
     })
     save_checkpoint(
-        os.path.join(run_dir, "latest.pt"), model, optimizer, scheduler,
+        os.path.join(run_dir, "latest.pt"), base_gpt, optimizer, scheduler,
         precision, max_steps, tokens_seen, config, best_val_loss,
         is_best=(best_val_loss == val_loss))
     plot_loss_curves(run_dir)
@@ -324,7 +345,8 @@ def train(config: dict, resume: bool = False) -> dict:
         "tokens_seen": tokens_seen,
         "tokens_per_sec": round(tokens_seen / max(time.time() - t_total0, 1e-6), 1),
         "peak_gpu_mem_mb": round(peak_memory_mb(), 1),
-        "num_params": model.get_num_params(non_embedding=False),
+        "num_params": base_gpt.get_num_params(non_embedding=False),
+        "devices_used": [int(d) for d in device_ids] if device_ids else ["cpu"],
     }
     logger.log(f"DONE | best val loss {summary['best_val_loss']} "
                f"| ppl {summary['val_ppl']} | {summary['total_time_s']}s")

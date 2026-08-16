@@ -17,7 +17,7 @@ bpe_sample_chars: null        # corpus is tiny -> train BPE on all of it
 encode_chunk_chars: 4000000   # chunk size for the .bin encoding pass
 
 # ---- default tier ------------------------------------------------
-size: nano                    # ZBook-local tier default; T4 uses --size gpt2
+size: nano                    # local machine-local tier default; T4 uses --size gpt2
 
 # ---- generation (identical for EVERY variant - plan section 27) ----
 eval:

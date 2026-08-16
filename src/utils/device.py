@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
+import torch.nn as nn
 
 
 def get_device() -> str:
@@ -96,3 +97,66 @@ def gpu_peak_flops(device: str) -> float:
         if key in name:
             return flops
     return 65e12  # unknown GPU: assume T4-class so MFU stays sane
+
+
+# --------------------------------------------------------------------------
+# Multi-GPU support (Kaggle offers 2x T4)
+# --------------------------------------------------------------------------
+class LogitsOnly(nn.Module):
+    """Adapter: GPT.forward returns (logits, loss); nn.DataParallel gathers
+    plain tensors (not tuples), so the parallel replica exposes a
+    logits-only forward and the trainer computes the loss on the master.
+
+    WHY this exists at all: the loss is a single scalar per device - if
+    DataParallel had to gather losses, the trainer would receive a batch of
+    scalars and the reduction semantics would be an extra thing to verify.
+    Computing cross-entropy outside the model keeps ONE loss path for
+    single-GPU and multi-GPU, i.e. zero behavioral difference."""
+
+    def __init__(self, gpt: nn.Module):
+        super().__init__()
+        self.gpt = gpt
+
+    def forward(self, idx):
+        return self.gpt(idx)[0]
+
+
+def resolve_device_ids(devices="auto") -> list:
+    """Which CUDA devices to use, given config 'devices' (auto | int | list).
+
+    'auto' uses every GPU the runtime offers (Kaggle T4x2 -> [0, 1]).
+    An explicit int caps the count. Returns [] when no CUDA exists."""
+    if not torch.cuda.is_available():
+        return []
+    n = torch.cuda.device_count()
+    if n == 0:
+        return []
+    if devices == "auto" or devices is None:
+        return list(range(n))
+    if isinstance(devices, int):
+        return list(range(min(devices, n)))
+    if isinstance(devices, (list, tuple)):
+        return [int(d) for d in devices if int(d) < n]
+    return [0]
+
+
+def wrap_parallel(model: nn.Module, device_ids: list):
+    """Wrap in nn.DataParallel when device_ids has more than one entry.
+
+    WHY DataParallel and not DDP here: a Kaggle/Colab notebook is a single
+    process - DataParallel splits the micro-batch across the 2 GPUs and
+    AVERAGES gradients before the optimizer step, which is the same update
+    as one GPU with the full micro-batch (this model has no BatchNorm, so
+    there are no cross-device statistics to worry about). The ablation
+    stays intact: same effective batch, same recipe, ~2x throughput.
+    Returns (model_or_wrapped, base_gpt)."""
+    if len(device_ids) <= 1:
+        return model, model
+    wrapped = nn.DataParallel(LogitsOnly(model), device_ids=device_ids)
+    return wrapped, model  # base_gpt stays the plain GPT for ckpt/generate
+
+
+def get_base_gpt(model: nn.Module) -> nn.Module:
+    """Recover the plain GPT from a possibly-wrapped model."""
+    m = model.module if isinstance(model, nn.DataParallel) else model
+    return m.gpt if isinstance(m, LogitsOnly) else m

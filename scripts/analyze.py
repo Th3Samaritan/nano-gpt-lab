@@ -15,7 +15,7 @@ WHY
 ----
 Keeps reporting separate from training: you can re-analyze old runs after
 the session ends (the runs dir is mirrored to Drive / persisted on
-Kaggle), and the charts use the same code for the ZBook and the T4 tiers.
+Kaggle), and the charts use the same code for the local machine and the T4 tiers.
 """
 from __future__ import annotations
 

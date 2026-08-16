@@ -18,7 +18,7 @@ is ~100x the Shakespeare corpus.
 
 WHERE
 -----
-Intended for the Colab/Kaggle T4 tier; on the ZBook only tiny limits make
+Intended for the Colab/Kaggle T4 tier; on the local machine only tiny limits make
 sense (set train_limit_chars: 2_000_000 to keep local runs fast).
 """
 from __future__ import annotations

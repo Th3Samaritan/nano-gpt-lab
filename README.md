@@ -21,15 +21,29 @@ the goal is answering WHY the number changed).
 
 | Tier | Where | What happens there |
 |---|---|---|
-| **ZBook (your PC)** | this repo | First-principles implementation, unit tests, BPE/RoPE/attention from scratch, tiny models, debugging, experiment development |
+| **Local machine (your PC)** | this repo | First-principles implementation, unit tests, BPE/RoPE/attention from scratch, tiny models, debugging, experiment development |
 | **Colab/Kaggle T4** | `notebooks/colab_kaggle_lab.ipynb` | Larger NanoGPT, TinyStories, OpenWebText subset, FlashAttention benchmarks, GPT-2 ~124M runs |
 
 Nothing in `src/` knows which tier it is on - the only platform-aware file
 is `src/utils/environment.py`.
 
+### Kaggle T4x2 (both GPUs, ~2x speed)
+
+Kaggle also offers a 2x T4 accelerator. When it is present, training
+automatically wraps the model in `nn.DataParallel`: the micro-batch is
+split across the two GPUs and the gradients are averaged before the
+optimizer step - the same update as one GPU with the full micro-batch
+(no BatchNorm here, so no cross-device statistics). Same recipe, same
+effective batch, roughly half the wall-clock. Control it with
+`--devices auto | 1 | 2` (or `DEVICES` in the notebook); the devices
+actually used are recorded in every run's `config.yaml` and
+`environment.txt`. Checkpoints always store the plain model (no
+`module.` prefixes), so a T4x2 run resumes fine on a single T4 and
+vice versa.
+
 ---
 
-## Quick start (ZBook)
+## Quick start (local machine)
 
 ```bash
 # 1. deps (torch + numpy + pyyaml + tqdm + matplotlib + requests)
@@ -74,7 +88,7 @@ python scripts/analyze.py --dataset shakespeare --size nano
 Repository: https://github.com/Th3Samaritan/nano-gpt-lab
 
 ```bash
-# after changing code on the ZBook:
+# after changing code on the local machine:
 cd nano-gpt-lab
 git add -A && git commit -m "describe the change" && git push
 
@@ -129,7 +143,7 @@ The training recipe in all four files is byte-identical - a run's own
 
 | Config | Dataset | Tier | Notes |
 |---|---|---|---|
-| `configs/shakespeare.yaml` | Tiny Shakespeare (1.1MB) | ZBook | Pipeline debugger + rapid A/B/C/D |
+| `configs/shakespeare.yaml` | Tiny Shakespeare (1.1MB) | local machine | Pipeline debugger + rapid A/B/C/D |
 | `configs/tinystories.yaml` | TinyStories **50MB documented subset** | T4 | Natural-language transfer test |
 | `configs/openwebtext.yaml` | OpenWebText **100MB documented subset** | T4 | Realistic pretraining (needs `pip install datasets` or a local file) |
 
@@ -218,7 +232,7 @@ Notebooks: `01_attention_from_scratch`, `02_rope_from_scratch`,
    result → why you expected it → what happened → limitation → next
    experiment (plan section 32).
 
-### First ZBook result (interim - 250 steps, nano, seed 42)
+### First local machine result (interim - 250 steps, nano, seed 42)
 
 | Variant | Best val loss | PPL |
 |---|---|---|
@@ -238,7 +252,7 @@ Caveats: one seed, CPU fp32, 2M tokens, tiny model. The T4 `gpt2` runs
 
 ## Roadmap (from the plan, section 36)
 
-ZBook: env → BPE → data → vanilla attention → learned positions → tiny
+local machine: env → BPE → data → vanilla attention → learned positions → tiny
 NanoGPT → **overfit gate** → Shakespeare baseline → RoPE → fused flash →
 Shakespeare A/B/C/D → analysis.
 T4: TinyStories matrix → OpenWebText subset → scale to GPT-2 124M →

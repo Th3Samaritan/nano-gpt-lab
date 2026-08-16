@@ -93,3 +93,23 @@ def test_generate_all_variants_run():
         x = torch.randint(0, 300, (1, 8))
         out = model.generate(x, max_new_tokens=5, temperature=1.0)
         assert out.shape == (1, 13), f"{attn}+{pos}"
+
+
+def test_parallel_wiring_on_cpu():
+    """Multi-GPU wiring must be a no-op without CUDA: the wrapper returns
+    the plain model and get_base_gpt recovers it (the T4x2 path uses the
+    same code, so this guards the interface the trainer relies on)."""
+    from src.utils.device import get_base_gpt, resolve_device_ids, wrap_parallel
+    model = GPT(_cfg("flash_fused", "rope"))
+    ids = resolve_device_ids("auto")  # [] on CPU-only machines
+    wrapped, base = wrap_parallel(model, ids)
+    assert wrapped is model and base is model
+    assert get_base_gpt(wrapped) is model
+    # And the DP-safe loss path the trainer now uses everywhere:
+    import torch.nn.functional as F
+    x = torch.randint(0, 300, (2, 32))
+    y = torch.randint(0, 300, (2, 32))
+    out = wrapped(x)
+    logits = out[0] if isinstance(out, tuple) else out
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1))
+    assert loss.ndim == 0 and loss.item() > 0

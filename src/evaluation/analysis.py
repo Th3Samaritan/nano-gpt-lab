@@ -18,7 +18,7 @@ re-trains and never guesses.
 WHERE
 -----
 Used by scripts/analyze.py and notebooks/04_experiment_analysis.ipynb,
-both on the ZBook and after a Colab/Kaggle session (the runs directory is
+both on the local machine and after a Colab/Kaggle session (the runs directory is
 mirrored to Drive / persisted on Kaggle).
 """
 from __future__ import annotations
