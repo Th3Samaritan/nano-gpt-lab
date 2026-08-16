@@ -152,6 +152,10 @@ def wrap_parallel(model: nn.Module, device_ids: list):
     Returns (model_or_wrapped, base_gpt)."""
     if len(device_ids) <= 1:
         return model, model
+    # The base module must live on device_ids[0] (DataParallel's output
+    # device); it usually already does (the trainer calls .to('cuda')),
+    # this guards callers that wrapped from CPU.
+    model = model.to(f"cuda:{device_ids[0]}")
     wrapped = nn.DataParallel(LogitsOnly(model), device_ids=device_ids)
     return wrapped, model  # base_gpt stays the plain GPT for ckpt/generate
 

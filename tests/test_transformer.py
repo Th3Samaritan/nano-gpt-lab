@@ -95,20 +95,27 @@ def test_generate_all_variants_run():
         assert out.shape == (1, 13), f"{attn}+{pos}"
 
 
-def test_parallel_wiring_on_cpu():
-    """Multi-GPU wiring must be a no-op without CUDA: the wrapper returns
-    the plain model and get_base_gpt recovers it (the T4x2 path uses the
-    same code, so this guards the interface the trainer relies on)."""
+def test_parallel_wiring():
+    """The multi-GPU interface the trainer relies on must work on ANY
+    device configuration: CPU / 1 GPU is a no-op, multi-GPU (Kaggle T4x2)
+    wraps in DataParallel, and get_base_gpt always recovers the plain GPT.
+    This is the exact contract the trainer builds on."""
     from src.utils.device import get_base_gpt, resolve_device_ids, wrap_parallel
-    model = GPT(_cfg("flash_fused", "rope"))
-    ids = resolve_device_ids("auto")  # [] on CPU-only machines
+    ids = resolve_device_ids("auto")
+    device = "cuda" if ids else "cpu"
+    model = GPT(_cfg("flash_fused", "rope")).to(device)
     wrapped, base = wrap_parallel(model, ids)
-    assert wrapped is model and base is model
-    assert get_base_gpt(wrapped) is model
-    # And the DP-safe loss path the trainer now uses everywhere:
+    assert base is model                      # optimizer/checkpoints use base
+    assert get_base_gpt(wrapped) is model     # unwrap always works
+    if len(ids) <= 1:
+        assert wrapped is model               # single device: no wrapper
+    else:
+        import torch.nn as nn
+        assert isinstance(wrapped, nn.DataParallel)  # T4x2: real DP path
+    # The DP-safe loss path the trainer uses for every step/eval:
     import torch.nn.functional as F
-    x = torch.randint(0, 300, (2, 32))
-    y = torch.randint(0, 300, (2, 32))
+    x = torch.randint(0, 300, (2, 32)).to(device)
+    y = torch.randint(0, 300, (2, 32)).to(device)
     out = wrapped(x)
     logits = out[0] if isinstance(out, tuple) else out
     loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1))
