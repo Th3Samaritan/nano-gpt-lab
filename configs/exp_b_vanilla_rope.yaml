@@ -1,0 +1,25 @@
+# ------------------------------------------------------------------
+# EXPERIMENT B - Vanilla causal attention + RoPE (rotation replaces
+# the learned position table).
+# ------------------------------------------------------------------
+experiment: B
+label: "Vanilla + RoPE"
+
+# ---- THE two experimental variables (only these differ A/B/C/D) ----
+attention: vanilla
+position: rope               # no position table: q/k are rotated
+rope_base: 10000.0           # RoFormer's theta base
+
+# ---- shared training recipe (identical across A/B/C/D) ---------------
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

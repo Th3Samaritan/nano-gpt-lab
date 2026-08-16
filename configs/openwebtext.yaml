@@ -1,0 +1,30 @@
+# ------------------------------------------------------------------
+# OpenWebText - Dataset 3 (realistic pretraining subset, plan sec 21)
+# Needs `pip install datasets` OR a local text file below.
+# Colab/Kaggle T4 tier only.
+# ------------------------------------------------------------------
+dataset: openwebtext
+name: OpenWebText (subset)
+
+# ---- data source --------------------------------------------------
+# No direct URL: streamed from HuggingFace Skylion007/openwebtext by
+# data/prepare_openwebtext.py. Set local_file to bypass HF:
+local_file: null
+train_limit_chars: 100000000  # documented subset: 100MB of ~40GB
+val_ratio: 0.05               # 5% of the subset held out as validation
+
+# ---- tokenizer ------------------------------------------------------
+vocab_size: 10000
+bpe_sample_chars: 10000000
+encode_chunk_chars: 4000000
+
+# ---- default tier ------------------------------------------------
+size: gpt2
+
+# ---- generation (identical for EVERY variant - plan section 27) ----
+eval:
+  prompt: "The history of the internet began"
+  temperature: 0.8
+  top_k: 40
+  top_p: null
+  max_new_tokens: 200

@@ -1,0 +1,20 @@
+# --- Run artifacts: never version control experiment outputs ----------------
+# Every run dir holds config.yaml + metrics + checkpoints; they are reproduced
+# from code + config, so they stay out of git.
+runs/
+logs/
+results/
+checkpoints/*.pt
+
+# --- Data: raw text and tokenized caches can be large ------------------------
+data/*/
+!data/*.py
+
+# --- Python cruft -------------------------------------------------------------
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+build/
+dist/

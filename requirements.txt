@@ -1,0 +1,15 @@
+# Core ML stack. Colab and Kaggle already ship torch/numpy; this list only adds
+# the small utilities the lab needs on top of the base image.
+torch>=2.1
+numpy>=1.24
+pyyaml>=6.0
+tqdm>=4.65
+matplotlib>=3.7
+requests>=2.31
+
+# Optional: only needed for the OpenWebText preparation path (streams the
+# HuggingFace dataset instead of downloading a single flat text file).
+datasets>=2.16 ; python_version >= "3.9"
+
+# Optional: test runner. `scripts/run_tests.py` works without it.
+pytest>=7.4

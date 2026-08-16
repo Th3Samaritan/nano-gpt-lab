@@ -1,0 +1,26 @@
+# ------------------------------------------------------------------
+# EXPERIMENT D - Flash/fused attention + RoPE. The full modern stack:
+# rotation positions + fused attention kernels.
+# ------------------------------------------------------------------
+experiment: D
+label: "Flash + RoPE"
+
+# ---- THE two experimental variables (only these differ A/B/C/D) ----
+attention: flash_fused
+position: rope
+rope_base: 10000.0
+flash_tile_size: 64
+
+# ---- shared training recipe (identical across A/B/C/D) ---------------
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

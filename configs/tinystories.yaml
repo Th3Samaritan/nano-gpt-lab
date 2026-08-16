@@ -1,0 +1,30 @@
+# ------------------------------------------------------------------
+# TinyStories - Dataset 2 (natural language transfer test)
+# Intended for the Colab/Kaggle T4 tier; on the ZBook override
+# train_limit_chars: 2000000 to keep preparation fast.
+# ------------------------------------------------------------------
+dataset: tinystories
+name: TinyStories
+
+# ---- data source --------------------------------------------------
+train_url: "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt"
+val_url: "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-valid.txt"
+train_limit_chars: 50000000   # documented subset: 50MB of ~2.2GB (plan sec 4)
+val_limit_chars: 2000000      # documented subset: 2MB of validation
+val_ratio: null               # validation comes from val_url, not a split
+
+# ---- tokenizer ------------------------------------------------------
+vocab_size: 10000             # larger vocab for a richer distribution
+bpe_sample_chars: 10000000    # BPE trained on a 10MB sample (GPT-2 practice)
+encode_chunk_chars: 4000000
+
+# ---- default tier ------------------------------------------------
+size: gpt2                    # T4 tier default (12L/12H/768)
+
+# ---- generation (identical for EVERY variant - plan section 27) ----
+eval:
+  prompt: "Once upon a time,"
+  temperature: 0.8
+  top_k: 40
+  top_p: null
+  max_new_tokens: 200

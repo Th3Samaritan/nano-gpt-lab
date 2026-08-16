@@ -1,0 +1,27 @@
+# ------------------------------------------------------------------
+# EXPERIMENT C - Flash/fused attention + learned absolute positional
+# embeddings. Same model as A; only the attention kernel changes.
+# flash_tiled = the first-principles PyTorch tile loop (educational,
+# slow); flash_fused = torch's CUDA FlashAttention-2 kernels (fast).
+# ------------------------------------------------------------------
+experiment: C
+label: "Flash + Learned Position"
+
+# ---- THE two experimental variables (only these differ A/B/C/D) ----
+attention: flash_fused       # flash_tiled | flash_fused
+position: learned
+flash_tile_size: 64          # tile size when running flash_tiled
+
+# ---- shared training recipe (identical across A/B/C/D) ---------------
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

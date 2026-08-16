@@ -1,0 +1,27 @@
+# ------------------------------------------------------------------
+# EXPERIMENT A - control: Vanilla causal attention + learned absolute
+# positional embeddings (the original GPT-2 scheme).
+# ------------------------------------------------------------------
+experiment: A
+label: "Vanilla + Learned Position"
+
+# ---- THE two experimental variables (only these differ A/B/C/D) ----
+attention: vanilla            # explicit QK^T matrix, softmax, AV
+position: learned             # wte + wpe table (GPT-2 baseline)
+
+# ---- shared training recipe (identical across A/B/C/D) ---------------
+# Architecture + batch/lr values come from the --size preset
+# (nano on the ZBook, gpt2 on T4). These knobs are the SAME for every
+# experiment so they cannot explain any measured difference.
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null             # null = cosine decay until max_steps
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

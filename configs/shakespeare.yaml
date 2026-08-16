@@ -1,0 +1,28 @@
+# ------------------------------------------------------------------
+# Tiny Shakespeare - Dataset 1 (pipeline debugger, fast iteration)
+# Merged with an experiment yaml by src/utils/config.py.
+# ------------------------------------------------------------------
+dataset: shakespeare
+name: Tiny Shakespeare
+
+# ---- data source --------------------------------------------------
+train_url: "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
+val_url: null                 # validation is a 90/10 split of the train file
+train_limit_chars: null       # null = use the whole file (~1.1MB)
+val_ratio: 0.1                # 10% held out as validation
+
+# ---- tokenizer ------------------------------------------------------
+vocab_size: 4096              # BPE vocab trained from scratch on this corpus
+bpe_sample_chars: null        # corpus is tiny -> train BPE on all of it
+encode_chunk_chars: 4000000   # chunk size for the .bin encoding pass
+
+# ---- default tier ------------------------------------------------
+size: nano                    # ZBook-local tier default; T4 uses --size gpt2
+
+# ---- generation (identical for EVERY variant - plan section 27) ----
+eval:
+  prompt: "SCENE I. London. A street.\n"
+  temperature: 0.8
+  top_k: 40
+  top_p: null                 # null = nucleus sampling disabled
+  max_new_tokens: 200
