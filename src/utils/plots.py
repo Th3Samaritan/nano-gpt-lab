@@ -460,7 +460,12 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
 def plot_all_comparisons(summaries: List[dict], out_dir: str,
                          dataset_name: str = "",
                          threshold: float = 2.0) -> Dict[str, str]:
-    """Render the full layman comparison suite; returns path dict."""
+    """Render the full layman comparison suite; returns path dict.
+
+    Empty summaries (no completed runs) render nothing instead of crashing:
+    the analysis caller prints the 'train first' message."""
+    if not summaries:
+        return {}
     out = {
         "quality": plot_comparison_quality(
             summaries, os.path.join(out_dir, "01_which_recipe_learned_best.png"),

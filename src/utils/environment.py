@@ -50,34 +50,38 @@ except ImportError:  # pragma: no cover - torch is required for the lab
 def get_platform() -> str:
     """Return 'colab', 'kaggle' or 'local'.
 
-    Kaggle sets KAGGLE_KERNEL_RUN_TYPE only inside an interactive kernel.
-    Colab injects the google.colab module into sys.modules at boot.
+    Kaggle sets KAGGLE_KERNEL_RUN_TYPE inside an interactive kernel - and is
+    checked FIRST because Kaggle's image ships a `google.colab`-shaped
+    module that can fool a naive Colab check (that exact confusion used to
+    route Kaggle paths to /content and break config loading).
+    Real Colab is identified by importing google.colab.drive, which only
+    exists in an actual Colab runtime.
     """
+    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE"):
+        return "kaggle"
     try:
-        import google.colab  # noqa: F401  (import only to test presence)
+        from google.colab import drive  # noqa: F401 - only real Colab has this
         return "colab"
     except ImportError:
         pass
-    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE"):
-        return "kaggle"
     return "local"
 
 
 PLATFORM = get_platform()
 
-# Fixed repo locations per platform (see module docstring for the why).
+# Fixed locations used only for the Drive mirror on Colab.
 REPO_NAME = "nano-gpt-lab"
-_COLAB_REPO = f"/content/{REPO_NAME}"
-_KAGGLE_REPO = f"/kaggle/working/{REPO_NAME}"
 
 
 def repo_root() -> str:
-    """Absolute path to the repository root on this platform."""
-    if PLATFORM == "colab":
-        return _COLAB_REPO
-    if PLATFORM == "kaggle":
-        return _KAGGLE_REPO
-    # Local: this file lives at <root>/src/utils/environment.py
+    """Absolute path to the repository root.
+
+    Derived from THIS file's location (<root>/src/utils/environment.py ->
+    <root>), which is correct on every platform and regardless of the
+    working directory - the git-clone/zipball workflow always places the
+    package inside the repo, so hardcoded platform paths are unnecessary
+    (they previously broke Kaggle runs by resolving to /content).
+    """
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 

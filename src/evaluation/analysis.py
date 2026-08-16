@@ -141,6 +141,11 @@ def analyze(dataset: str, size: Optional[str] = None,
             out_dir: Optional[str] = None) -> dict:
     """Convenience wrapper: collect + table + json + PNG suite."""
     summaries = collect_summaries(dataset, size, seeds)
+    if not summaries:
+        # No completed runs: say so instead of crashing in the charts
+        # (an empty metrics set must never surface as a numpy error).
+        print("(no completed runs found - train first, then re-run the analysis)")
+        return {"summaries": [], "plots": {}, "table": comparison_table([])}
     if out_dir is None:
         from src.utils.environment import repo_root
         out_dir = os.path.join(repo_root(), "results", dataset)
