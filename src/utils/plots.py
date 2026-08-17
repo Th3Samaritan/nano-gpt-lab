@@ -831,6 +831,98 @@ def plot_quality_vs_cost(summaries: List[dict], out_path: str,
     return _save(fig, out_path)
 
 
+def plot_overfit_check(summaries: List[dict], out_path: str,
+                       dataset_name: str = "") -> Optional[str]:
+    """THE OVERFIT DETECTOR: train vs validation loss per variant, in EPOCHS.
+
+    Overfitting is a function of EPOCHS (passes over the training set),
+    not tokens - a 65M-token budget can be 4 healthy epochs (TinyStories)
+    or 260 memorization epochs (Shakespeare). Each panel plots both curves
+    on the epoch axis; the fork (train keeps falling, validation turns and
+    climbs) is the overfit signature. Panels get a red OVERFIT badge when
+    the val-train gap at the end exceeds 0.5 (matching summary.json's
+    overfit_signal rule), and the gap is printed on every panel.
+
+    HOW to read it: two lines together and falling = healthy. Lines
+    FORK apart = the model is memorizing, not learning. Badge = the run
+    is invalid for quality ranking; use best.pt / early evals only."""
+    import csv
+    import json as _json
+    dims, groups, order = _group_summaries(summaries)
+    colors = _group_colors(order, dims)
+    panels = []
+    for k in order:
+        s = groups[k][0]  # first seed: the shape of the story
+        csv_path = os.path.join(s["run_dir"], "metrics.csv")
+        if not os.path.exists(csv_path):
+            continue
+        tokens, train_l, val_l = [], [], []
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    t = int(row["tokens_seen"])
+                    tr = float(row["train_loss"])
+                    v = float(row["val_loss"])
+                except (ValueError, KeyError):
+                    continue  # final rows carry val only: need BOTH curves
+                tokens.append(t)
+                train_l.append(tr)
+                val_l.append(v)
+        if not tokens:
+            continue
+        train_tokens = 1
+        meta_path = os.path.join(s["run_dir"], "meta.json")
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    train_tokens = max(_json.load(f).get("train_tokens", 1), 1)
+            except (OSError, ValueError):
+                pass
+        epochs = [t / train_tokens for t in tokens]
+        gap = val_l[-1] - train_l[-1]
+        panels.append((k, _group_label(k, dims), epochs, train_l, val_l,
+                       gap, colors[order.index(k)]))
+    if not panels:
+        return None
+    n = len(panels)
+    cols = 2 if n <= 6 else 3
+    rows = math.ceil(n / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(6.6 * cols, 4.4 * rows),
+                             squeeze=False)
+    for i, (k, label, epochs, train_l, val_l, gap, color) in enumerate(panels):
+        ax = axes[i // cols, i % cols]
+        ax.plot(epochs, train_l, color="#0072B2", lw=2,
+                label="training")
+        ax.plot(epochs, val_l, color="#D55E00", lw=2,
+                label="validation")
+        ax.fill_between(epochs, train_l, val_l, alpha=0.12, color="#888888")
+        ax.set_title(label, fontsize=11.5, color=color, weight="bold")
+        ax.set_xlabel("epochs over the training set", fontsize=9.5)
+        ax.set_ylabel("loss", fontsize=9.5)
+        badge = gap > 0.5
+        ax.text(0.98, 0.94,
+                f"gap: {gap:.2f}" + ("  OVERFIT" if badge else "  ok"),
+                transform=ax.transAxes, ha="right", va="top", fontsize=10.5,
+                color="#8B0000" if badge else "#006400", weight="bold",
+                bbox=dict(facecolor="white", alpha=0.85, edgecolor="none"))
+        ax.grid(alpha=0.25)
+    for i in range(n, rows * cols):
+        axes[i // cols, i % cols].axis("off")
+    handles = [plt.Line2D([], [], color="#0072B2", lw=2),
+               plt.Line2D([], [], color="#D55E00", lw=2)]
+    fig.legend(handles, ["training", "validation"], loc="lower center",
+               ncol=2, fontsize=11, frameon=False)
+    fig.suptitle(
+        f"Overfit check on {dataset_name or 'the data'}: two lines together = "
+        "learning. Forking apart = memorizing.", fontsize=15.5, y=1.0)
+    fig.text(0.5, 0.955,
+             "The fork is the tell: training keeps falling while validation "
+             "turns and climbs. Badged runs are invalid for quality ranking.",
+             ha="center", fontsize=11.5, color="#555555")
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    return _save(fig, out_path)
+
+
 def plot_eval_reports(summaries: List[dict], out_dir: str,
                       dataset_name: str = "") -> Dict[str, str]:
     """Render the evaluation-battery charts (05-08); skips gracefully when
@@ -876,6 +968,9 @@ def plot_all_comparisons(summaries: List[dict], out_dir: str,
             os.path.join(out_dir, "03_learning_speed.png"), dataset_name),
         "verdict": plot_verdict_card(
             summaries, os.path.join(out_dir, "04_verdict_card.png"),
+            dataset_name),
+        "overfit": plot_overfit_check(
+            summaries, os.path.join(out_dir, "09_overfit_check.png"),
             dataset_name),
     }
     return out

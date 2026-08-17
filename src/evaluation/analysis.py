@@ -36,7 +36,7 @@ def _read_metrics(metrics_csv: str) -> dict:
     """Aggregate a metrics.csv into best/throughput/memory scalars."""
     out = {"best_val_loss": None, "final_tokens_per_sec": None,
            "peak_gpu_mem_mb": None, "last_tokens_seen": None,
-           "rows": 0}
+           "gen_gap": None, "rows": 0}
     if not os.path.exists(metrics_csv):
         return out
     with open(metrics_csv, newline="", encoding="utf-8") as f:
@@ -62,6 +62,12 @@ def _read_metrics(metrics_csv: str) -> dict:
                 pass
             try:
                 out["peak_gpu_mem_mb"] = float(row["gpu_mem_mb"])
+            except (ValueError, KeyError):
+                pass
+            # Generalization gap (the overfit signature): val - train at the
+            # LAST evaluation that has both curves.
+            try:
+                out["gen_gap"] = val - float(row["train_loss"])
             except (ValueError, KeyError):
                 pass
     return out
@@ -121,6 +127,8 @@ def collect_summaries(dataset: str, size: Optional[str] = None,
             "seed": cfg.get("seed"),
             "best_val_loss": round(agg["best_val_loss"], 4),
             "val_ppl": round(math.exp(agg["best_val_loss"]), 2),
+            "gen_gap": (round(agg["gen_gap"], 3)
+                        if agg["gen_gap"] is not None else None),
             "tokens_per_sec": round(agg["final_tokens_per_sec"] or 0.0, 1),
             "peak_gpu_mem_mb": round(agg["peak_gpu_mem_mb"] or 0.0, 1),
             "tokens_seen": agg["last_tokens_seen"] or 0,
@@ -134,17 +142,19 @@ def comparison_table(summaries: List[dict]) -> str:
     if not summaries:
         return "(no completed runs found)"
     header = (f"{'attention+position':<22} {'act':<7} {'opt':<6} {'seed':>5} "
-              f"{'val loss':>9} {'ppl':>8} {'tok/s':>9} {'peakMB':>8} "
-              f"{'tokens':>12}")
+              f"{'val loss':>9} {'ppl':>8} {'gap':>7} {'tok/s':>9} "
+              f"{'peakMB':>8} {'tokens':>12}")
     lines = [header, "-" * len(header)]
     for s in sorted(summaries, key=lambda d: (d["seed"], str(d["experiment"]))):
         act = s.get("activation", "gelu")
         if act == "swiglu":
             act += "+" if s.get("swiglu_matched") else "-"
+        gap = s.get("gen_gap")
+        gap_s = f"{gap:.3f}" if gap is not None else "n/a"
         lines.append(
             f"{s['attention']}+{s['position']:<13} {act:<7} "
             f"{s.get('optimizer', 'adamw'):<6} {s['seed']:>5} "
-            f"{s['best_val_loss']:>9.4f} {s['val_ppl']:>8.2f} "
+            f"{s['best_val_loss']:>9.4f} {s['val_ppl']:>8.2f} {gap_s:>7} "
             f"{s['tokens_per_sec']:>9.1f} {s['peak_gpu_mem_mb']:>8.1f} "
             f"{s['tokens_seen']:>12,}")
     return "\n".join(lines)

@@ -223,6 +223,13 @@ four charts in `results/<dataset>/` designed to be readable in 5 seconds:
 | `06_trust_and_calibration.png` | ECE trust-meter | Lower = confidence matches accuracy |
 | `07_long_range_memory.png` | Loss by context-position bucket | Flatter = distance doesn't hurt it |
 | `08_quality_vs_cost.png` | Val loss vs training FLOPs | Lower-left corner = best value per compute |
+| `09_overfit_check.png` | Train vs val loss per variant, in EPOCHS | Two lines together = learning; forking apart = memorizing (red OVERFIT badge when the gap > 0.5) |
+
+The comparison table also reports the **generalization gap** (val − train
+at the last evaluation) — a gap near zero says the model learned, a
+growing gap says it memorized. The Kaggle gpt2-on-Shakespeare lesson is
+baked in: 65M tokens there = ~260 epochs = a 4-nat fork; charts 09 would
+have badged it immediately.
 
 Charts 05-08 need the evaluation battery first (`scripts/evaluate.py`
 per run, or cell 6 of the runner notebook); charts 01-04 come straight
