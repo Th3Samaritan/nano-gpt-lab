@@ -296,7 +296,9 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
                             dataset_name: str = "") -> str:
     """Bar chart: best validation loss per variant, winner highlighted.
 
-    'Lower = better' printed ON the chart; the winner's bar gets a star.
+    'Lower = better' printed ON the chart. Ties are REAL science here, not
+    a display bug: flash == vanilla numerically, so B/D (or A/C) often tie
+    EXACTLY - every tied bar gets a star, none is crowned arbitrarily.
     """
     keys = [_variant_key(s) for s in summaries]
     vals = [s.get("best_val_loss", s.get("final_val_loss", 0.0)) for s in summaries]
@@ -304,9 +306,17 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
     x = np.arange(len(vals))
     colors = [_color_of(k) for k in keys]
     bars = ax.bar(x, vals, color=colors, width=0.55)
-    best_i = int(np.argmin(vals))
-    ax.scatter([best_i], [vals[best_i]], marker="*", s=420, color="#FFD700",
-               edgecolor="black", zorder=5, label="winner")
+    # Winners = every variant at (or within 1e-9 of) the best loss. The
+    # previous single-argmin star silently picked the FIRST tied variant -
+    # which mislabelled flash+RoPE's exact tie with vanilla+RoPE.
+    best_val = min(vals)
+    winners = [i for i, v in enumerate(vals) if abs(v - best_val) < 1e-9]
+    for i in winners:
+        ax.scatter([i], [vals[i]], marker="*", s=420, color="#FFD700",
+                   edgecolor="black", zorder=5)
+    label = "winner" if len(winners) == 1 else "winners (exact tie)"
+    ax.scatter([], [], marker="*", s=420, color="#FFD700",
+               edgecolor="black", label=label)
     ax.set_xticks(x)
     ax.set_xticklabels([_label_of(k) for k in keys], fontsize=11)
     ax.set_ylabel("mistake level (best validation loss)", fontsize=_MED)
@@ -408,6 +418,11 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
 
     One glance answers: which recipe won, by how much, and why (its cell
     shows quality + speed + memory numbers).
+
+    Ties are honoured: flash == vanilla numerically, so RoPE pairings
+    (B and D) frequently tie EXACTLY - both cells get the winner frame and
+    the subtitle explains that the flash version of the tie wins on
+    efficiency (speed/memory), not quality.
     """
     by_key: Dict[str, dict] = {}
     for s in summaries:
@@ -416,7 +431,15 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
     fig = plt.figure(figsize=(12, 8.5))
     gs = fig.add_gridspec(2, 2, height_ratios=[1, 1])
     vals = [by_key[k].get("best_val_loss", 0.0) for k in order if k in by_key]
-    best_key = order[int(np.argmin(vals))] if vals else None
+    # Winner set = every variant at the best loss (tie-aware). The old
+    # single argmin crowned the first tied variant - misleading, because
+    # a flash/vanilla tie is the EXPECTED, exact behaviour.
+    win_keys: List[str] = []
+    if vals:
+        best_val = min(vals)
+        win_keys = [k for k in order if k in by_key
+                    and abs(by_key[k].get("best_val_loss", 0.0) - best_val) < 1e-9]
+    tied = len(win_keys) > 1
     for k, (row, col) in zip(order, [(0, 0), (0, 1), (1, 0), (1, 1)]):
         ax = fig.add_subplot(gs[row, col])
         entry = by_key.get(k)
@@ -426,7 +449,7 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
             ax.text(0.5, 0.5, "not run yet", ha="center", va="center",
                     fontsize=14, color="#999999")
             continue
-        win = (k == best_key)
+        win = (k in win_keys)
         title_col = "#B8860B" if win else _color_of(k)
         ax.text(0.5, 0.86, _label_of(k), ha="center", va="center",
                 fontsize=15, color=title_col, weight="bold")
@@ -442,17 +465,27 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
                 f"memory: {entry.get('peak_gpu_mem_mb', 0.0):,.0f} MB",
                 ha="center", fontsize=12)
         if win:
-            ax.text(0.5, 0.05, "WINNER", ha="center", fontsize=16,
-                    color="#B8860B", weight="bold")
+            ax.text(0.5, 0.05,
+                    "WINNER (tied)" if tied else "WINNER",
+                    ha="center", fontsize=16, color="#B8860B", weight="bold")
             for spine in ax.spines.values():
                 spine.set_color("#B8860B")
                 spine.set_linewidth(4)
     fig.suptitle(
         f"The four recipes at a glance - {dataset_name or 'the text'}",
         fontsize=19, y=0.985)
-    fig.text(0.5, 0.955,
-             "Lower mistake level wins. Speed and memory show what the win costs.",
-             ha="center", fontsize=13, color="#555555")
+    if tied:
+        flash_won = any("flash_" in k for k in win_keys)
+        vanilla_won = any("vanilla_" in k for k in win_keys)
+        if flash_won and vanilla_won:
+            note = ("Exact quality tie (flash = classic by construction). "
+                    "The flash version of the tie wins on speed & memory.")
+        else:
+            note = ("Exact quality tie - several recipes reached the same "
+                    "mistake level.")
+    else:
+        note = "Lower mistake level wins. Speed and memory show what the win costs."
+    fig.text(0.5, 0.955, note, ha="center", fontsize=13, color="#555555")
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     return _save(fig, out_path)
 
