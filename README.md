@@ -310,6 +310,34 @@ Notebooks: `01_attention_from_scratch`, `02_rope_from_scratch`,
    result → why you expected it → what happened → limitation → next
    experiment (plan section 32).
 
+### Kaggle T4x2 result (gpt2, 89M params, seed 42) - and the lesson it taught
+
+| Variant | best val loss | final val loss | tok/s | VRAM |
+|---|---|---|---|---|
+| A vanilla+learned | 8.212 | 12.42 | 15,300 | 5.59 GB |
+| B vanilla+RoPE | 8.217 | 12.01 | 14,188 | 5.57 GB |
+| C flash+learned | 8.212 | 12.37 | 24,164 | 3.84 GB |
+| D flash+RoPE | 8.216 | 12.06 | 21,697 | 3.90 GB |
+
+Valid conclusions: **flash == vanilla at 89M params** (differences of
+0.0002-0.0008 = kernel noise), and **flash wins efficiency unconditionally**
+(+58% tok/s, -31% VRAM on T4x2).
+
+Invalid conclusion: the quality ranking. 65.5M tokens over Shakespeare's
+~250k-token training set = **~260 epochs**; every model memorized the
+corpus and diverged on validation (final loss ~4 nats worse than best).
+Always check the final-vs-best gap before ranking a run.
+
+Two guards now ship in the trainer (applied identically to every variant):
+`max_epochs` (default 50 - stops before memorization) and
+`early_stop_patience` (default 10 evals - stops when validation plateaus,
+keeps best.pt). Every summary records `stopped_reason`, `epochs_seen`,
+and an `overfit_signal` flag.
+
+**Correct size-dataset pairings:** nano ↔ Shakespeare (250-500 steps);
+gpt2 ↔ TinyStories (65M tokens ≈ 4 epochs - the valid scaled comparison);
+gpt2 ↔ Shakespeare only for efficiency numbers.
+
 ### First local machine result (interim - 250 steps, nano, seed 42)
 
 | Variant | Best val loss | PPL |

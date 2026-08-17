@@ -130,6 +130,26 @@ def _ensure_data(config: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
+# Training-guard helpers (testable, pure)
+# --------------------------------------------------------------------------
+def epochs_from_tokens(tokens_seen: int, train_tokens: int) -> float:
+    """How many full passes over the training set have been made."""
+    return tokens_seen / max(train_tokens, 1)
+
+
+def early_stop_reached(evals_since_best: int, patience: int) -> bool:
+    """Standard early-stop rule: patience=0 disables it."""
+    return bool(patience) and evals_since_best >= patience
+
+
+def overfit_signal(final_val: float, best_val: float,
+                   threshold: float = 0.5) -> bool:
+    """True when the END state is much worse than the best observed -
+    the classic memorization/divergence signature."""
+    return final_val > best_val + threshold
+
+
+# --------------------------------------------------------------------------
 # Main training function
 # --------------------------------------------------------------------------
 def train(config: dict, resume: bool = False) -> dict:
@@ -219,11 +239,34 @@ def train(config: dict, resume: bool = False) -> dict:
     token_dtype = data.get("token_dtype", "uint16")
     train_loader = TokenDataLoader(data["train_bin"], block, micro, token_dtype)
     val_loader = TokenDataLoader(data["val_bin"], block, micro, token_dtype)
+
+    # ---- overfit guards (the gpt2-on-shakespeare lesson) -----------------
+    # 65M tokens over a 250k-token corpus = ~260 epochs = memorization +
+    # validation divergence (final val 12.4 vs best 8.2). Two defenses:
+    #   1. max_epochs : stop once the model has passed over the training
+    #      set too many times (dataset-sized budget, not step-sized)
+    #   2. early_stop_patience : stop when validation stops improving
+    #      (industry-standard; keeps best.pt)
+    # Both apply IDENTICALLY to every variant, so the ablation stays fair.
+    train_tokens = 1
+    meta_path = data.get("meta_path")
+    if meta_path and os.path.exists(meta_path):
+        import json as _json
+        with open(meta_path, "r", encoding="utf-8") as f:
+            train_tokens = max(_json.load(f).get("train_tokens", 1), 1)
+    max_epochs = config.get("max_epochs", 50)
+    patience = config.get("early_stop_patience", 10)
+    evals_since_best = 0
+    stop_reason = None
     logger.log(
         f"micro_batch={micro} accum={accum} effective_tokens/step={eff_tokens} "
         f"precision={dtype or 'fp32'} device={device}"
         f"{' x' + str(len(device_ids)) if len(device_ids) > 1 else ''} "
         f"optimizer={optimizer_name}")
+    logger.log(f"train_tokens={train_tokens:,} -> budget capped at "
+               f"{max_epochs} epochs "
+               f"({int(max_epochs * train_tokens / eff_tokens)} steps), "
+               f"early-stop patience {patience} evals")
 
     # ---- eval / sample parameters (identical for every variant) ---------
     eval_cfg = config.get("eval", {})
@@ -276,12 +319,18 @@ def train(config: dict, resume: bool = False) -> dict:
             val_loss = estimate_loss(model, val_loader.get_batch,
                                      precision, config.get("eval_iters", 20))
             last_val_loss = val_loss
-            best_val_loss = min(best_val_loss, val_loss)
+            improved = val_loss < best_val_loss - 1e-3
+            if improved:
+                best_val_loss = val_loss
+                evals_since_best = 0
+            else:
+                evals_since_best += 1
             elapsed = time.time() - t_total0
             tok_per_sec = tokens_seen / max(elapsed, 1e-6)
             n_gpus = max(len(device_ids), 1)
             mfu = (base_gpt.flops_per_token() * eff_tokens / max(dt, 1e-6)
                    / (gpu_peak_flops(device) * n_gpus)) if device == "cuda" else 0.0
+            epochs = epochs_from_tokens(tokens_seen, train_tokens)
             row = {
                 "step": step + 1, "tokens_seen": tokens_seen,
                 "train_loss": round(train_loss, 4),
@@ -297,13 +346,28 @@ def train(config: dict, resume: bool = False) -> dict:
             logger.log(
                 f"step {step+1}/{max_steps} | train {train_loss:.3f} "
                 f"val {val_loss:.3f} ppl {row['val_ppl']} | {tok_per_sec:.0f} "
-                f"tok/s | lr {scheduler.current_lr:.2e} | "
+                f"tok/s | ep {epochs:.1f} | lr {scheduler.current_lr:.2e} | "
                 f"gpu {row['gpu_mem_mb']:.0f}MB | mfu {mfu*100:.1f}%")
             try:
                 plot_loss_curves(run_dir)
             except Exception as exc:
                 logger.log(f"WARNING: loss-curve plot failed ({exc})")
             sync_run_to_drive(run_dir, full=False)
+            if early_stop_reached(evals_since_best, patience):
+                logger.log(
+                    f"EARLY STOP: val loss has not improved for {patience} "
+                    f"evaluations (best {best_val_loss:.4f}) - the model is "
+                    f"overfitting; best.pt is kept")
+                stop_reason = "early_stop"
+                break
+
+        # ---- epoch guard (overfit protection #1) -------------------------
+        if epochs_from_tokens(tokens_seen, train_tokens) >= max_epochs:
+            logger.log(
+                f"EPOCH CAP: reached {max_epochs} passes over the training "
+                f"set ({tokens_seen:,} tokens) - stopping before memorization")
+            stop_reason = "max_epochs"
+            break
 
         # ---- periodic generation (fixed sampler settings) ----------------
         if sample_interval > 0 and (step + 1) % sample_interval == 0:
@@ -365,7 +429,15 @@ def train(config: dict, resume: bool = False) -> dict:
         "peak_gpu_mem_mb": round(peak_memory_mb(), 1),
         "num_params": base_gpt.get_num_params(non_embedding=False),
         "devices_used": [int(d) for d in device_ids] if device_ids else ["cpu"],
+        "stopped_reason": stop_reason or "max_steps",
+        "epochs_seen": round(epochs_from_tokens(tokens_seen, train_tokens), 1),
+        "overfit_signal": overfit_signal(val_loss, best_val_loss),
     }
+    if summary["overfit_signal"]:
+        logger.log(
+            "WARNING: overfit signal - final val loss is far worse than the "
+            "best observed. Do not rank this run by its final loss; use "
+            "best_val_loss / best.pt and check the learning curve.")
     logger.log(f"DONE | best val loss {summary['best_val_loss']} "
                f"| ppl {summary['val_ppl']} | {summary['total_time_s']}s")
     import json as _json
