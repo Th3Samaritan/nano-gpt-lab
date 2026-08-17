@@ -67,9 +67,24 @@ def _read_metrics(metrics_csv: str) -> dict:
     return out
 
 
+# Which study each experiment label belongs to (ABLATION_PLAN sections 2/19):
+# attention = Study A, activation = Study B, optimizer = Study C.
+STUDY_OF_EXP = {
+    "A": "attention", "B": "attention", "C": "attention", "D": "attention",
+    "B1": "activation", "B2": "activation", "B3": "activation",
+    "B4a": "activation", "B4b": "activation",
+    "C1": "optimizer", "C2": "optimizer",
+}
+
+
 def collect_summaries(dataset: str, size: Optional[str] = None,
-                      seeds: Optional[List[int]] = None) -> List[dict]:
-    """One summary dict per completed run matching the filters."""
+                      seeds: Optional[List[int]] = None,
+                      study: Optional[str] = None) -> List[dict]:
+    """One summary dict per completed run matching the filters.
+
+    study filter ('attention' | 'activation' | 'optimizer') keeps the
+    charts honest: comparing Study B runs against Study A runs in one
+    chart would mix different budgets and variables."""
     from src.utils.config import load_yaml
     base = os.path.join(runs_dir(), dataset)
     summaries: List[dict] = []
@@ -85,6 +100,10 @@ def collect_summaries(dataset: str, size: Optional[str] = None,
             continue
         if seeds and cfg.get("seed") not in seeds:
             continue
+        if study:
+            exp = str(cfg.get("experiment", name))
+            if STUDY_OF_EXP.get(exp, "attention") != study:
+                continue
         agg = _read_metrics(os.path.join(run_dir, "metrics.csv"))
         if agg["best_val_loss"] is None:
             continue  # never evaluated: not a completed run
@@ -110,15 +129,21 @@ def collect_summaries(dataset: str, size: Optional[str] = None,
 
 
 def comparison_table(summaries: List[dict]) -> str:
-    """Plain-text table (plan section 17's required columns)."""
+    """Plain-text table with EVERY study variable visible (activation and
+    optimizer columns included, so ReLU/Adam runs are never hidden)."""
     if not summaries:
         return "(no completed runs found)"
-    header = (f"{'variant':<22} {'seed':>5} {'val loss':>9} {'ppl':>8} "
-              f"{'tok/s':>9} {'peakMB':>8} {'tokens':>12}")
+    header = (f"{'attention+position':<22} {'act':<7} {'opt':<6} {'seed':>5} "
+              f"{'val loss':>9} {'ppl':>8} {'tok/s':>9} {'peakMB':>8} "
+              f"{'tokens':>12}")
     lines = [header, "-" * len(header)]
     for s in sorted(summaries, key=lambda d: (d["seed"], str(d["experiment"]))):
+        act = s.get("activation", "gelu")
+        if act == "swiglu":
+            act += "+" if s.get("swiglu_matched") else "-"
         lines.append(
-            f"{s['attention']}+{s['position']:<13} {s['seed']:>5} "
+            f"{s['attention']}+{s['position']:<13} {act:<7} "
+            f"{s.get('optimizer', 'adamw'):<6} {s['seed']:>5} "
             f"{s['best_val_loss']:>9.4f} {s['val_ppl']:>8.2f} "
             f"{s['tokens_per_sec']:>9.1f} {s['peak_gpu_mem_mb']:>8.1f} "
             f"{s['tokens_seen']:>12,}")
@@ -141,18 +166,30 @@ def render_layman_reports(summaries: List[dict], dataset: str,
 
 def analyze(dataset: str, size: Optional[str] = None,
             seeds: Optional[List[int]] = None, threshold: float = 2.0,
-            out_dir: Optional[str] = None) -> dict:
-    """Convenience wrapper: collect + table + json + PNG suite."""
-    summaries = collect_summaries(dataset, size, seeds)
+            out_dir: Optional[str] = None, study: Optional[str] = None,
+            evals: bool = True) -> dict:
+    """Convenience wrapper: collect + table + json + PNG suite + eval
+    charts (when eval_report.json files exist)."""
+    summaries = collect_summaries(dataset, size, seeds, study)
     if not summaries:
         # No completed runs: say so instead of crashing in the charts
         # (an empty metrics set must never surface as a numpy error).
         print("(no completed runs found - train first, then re-run the analysis)")
-        return {"summaries": [], "plots": {}, "table": comparison_table([])}
+        return {"summaries": [], "plots": {}, "evals": {},
+                "table": comparison_table([])}
     if out_dir is None:
         from src.utils.environment import repo_root
         out_dir = os.path.join(repo_root(), "results", dataset)
+        if study:
+            out_dir = os.path.join(out_dir, f"study_{study}")
     save_comparison_json(summaries, os.path.join(out_dir, "comparison.json"))
     plots = render_layman_reports(summaries, dataset, out_dir, threshold)
-    return {"summaries": summaries, "plots": plots,
+    eval_plots = {}
+    if evals:
+        from src.utils.plots import plot_eval_reports
+        eval_plots = plot_eval_reports(summaries, out_dir, dataset)
+        if not eval_plots:
+            print("(no eval_report.json files yet - run scripts/evaluate.py "
+                  "on each run dir for the 05-08 battery charts)")
+    return {"summaries": summaries, "plots": plots, "evals": eval_plots,
             "table": comparison_table(summaries)}

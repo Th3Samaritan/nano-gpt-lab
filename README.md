@@ -83,6 +83,16 @@ python scripts/analyze.py --dataset shakespeare --size nano
 3. Everything lands in `/kaggle/working/nano-gpt-lab/` - persisted to your
    Kaggle account automatically as the notebook output.
 
+### Session persistence (Kaggle / Colab)
+
+Kaggle runs in the cloud: **locking or closing your laptop does NOT stop
+the kernel** - it runs until the notebook finishes or the GPU quota ends
+(~9-12h per Kaggle session). If a session does die: re-open the notebook,
+re-run from the top (bootstrap auto-pulls), and training CONTINUES - the
+training command always passes `--resume`, which resumes from `latest.pt`
+when one exists and otherwise starts fresh. The same works on Colab,
+where checkpoints are additionally mirrored to Drive.
+
 ### GitHub
 
 Repository: https://github.com/Th3Samaritan/nano-gpt-lab
@@ -208,7 +218,37 @@ four charts in `results/<dataset>/` designed to be readable in 5 seconds:
 | `01_which_recipe_learned_best.png` | Best val loss per variant | Lower bar = better learner; the star is the winner |
 | `02_speed_and_memory.png` | tok/s + peak GPU MB | Higher = faster; lower = less memory |
 | `03_learning_speed.png` | Tokens needed to hit a fixed loss | Shorter bar = learned faster (the "RoPE needs fewer tokens?" question) |
-| `04_verdict_card.png` | The 2×2 poster with all numbers | One glance: who won, by how much, at what cost |
+| `04_verdict_card.png` | The poster with all numbers | One glance: who won, by how much, at what cost |
+| `05_few_shot_learning.png` | ICL accuracy at 0/1/3/5 shots | Higher = the model really uses the pattern in context |
+| `06_trust_and_calibration.png` | ECE trust-meter | Lower = confidence matches accuracy |
+| `07_long_range_memory.png` | Loss by context-position bucket | Flatter = distance doesn't hurt it |
+| `08_quality_vs_cost.png` | Val loss vs training FLOPs | Lower-left corner = best value per compute |
+
+Charts 05-08 need the evaluation battery first (`scripts/evaluate.py`
+per run, or cell 6 of the runner notebook); charts 01-04 come straight
+from `metrics.csv`. Legends render below the charts (never overlapping)
+and multi-seed runs show mean ± std.
+
+## The evaluation battery (industry-standard metrics)
+
+```bash
+python scripts/evaluate.py --run-dir runs/<dataset>/<run> \
+    --shots "0 1 3 5" --n-items 40
+```
+
+writes `eval_report.json` per run with: val loss/ppl, **bits-per-byte**,
+**ECE calibration** (Guo et al. 2017), **long-range penalty** (loss by
+context-position bucket), **zero/one/few-shot ICL accuracy**
+(candidate-ranking discrimination on the dataset's own validation text -
+same protocol as emergent-ICL papers), **generation diversity**
+(distinct-1/2, repetition rate), and **inference tokens/sec**. Then
+`scripts/analyze.py --evals` renders charts 05-08. The comparison table
+now shows every study variable (attention, position, activation,
+optimizer) so runs like ReLU or Adam are never hidden.
+
+`--study attention|activation|optimizer` on analyze/train keeps each
+study's charts separated - mixing different budgets would make a
+comparison dishonest.
 
 Concept cartoons (also in the notebooks): `plot_attention_concept`,
 `plot_rope_concept`, `plot_flash_concept`, `plot_bpe_concept` in

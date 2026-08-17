@@ -431,7 +431,7 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
     ax.scatter([], [], marker="*", s=420, color="#FFD700",
                edgecolor="black", label=label)
     ax.set_xticks(x)
-    ax.set_xticklabels(keys, fontsize=11)
+    ax.set_xticklabels(keys, fontsize=10.5, rotation=12, ha="right")
     ax.set_ylabel("mistake level (best validation loss)", fontsize=_MED)
     title = f"Which recipe learned {dataset_name or 'the text'} best?"
     if multi_seed:
@@ -441,7 +441,9 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
                 ha="right", fontsize=_MED, color="#555555")
     for i, v in enumerate(vals):
         ax.text(i, v + 0.01 * max(vals), f"{v:.3f}", ha="center", fontsize=11)
-    ax.legend(fontsize=_MED, loc="upper right", frameon=False)
+    # Legend BELOW the chart (ncol=2): never overlaps the bars/star again.
+    ax.legend(fontsize=_MED, loc="upper center",
+              bbox_to_anchor=(0.5, -0.10), ncol=2, frameon=False)
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
     return _save(fig, out_path)
@@ -454,11 +456,11 @@ def plot_comparison_efficiency(summaries: List[dict], out_path: str) -> str:
     speeds = [_mean(groups[k], "tokens_per_sec") for k in order]
     mems = [_mean(groups[k], "peak_gpu_mem_mb") for k in order]
     colors = _group_colors(order, dims)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 5.2))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5.8))
     x = np.arange(len(keys))
     ax1.bar(x, speeds, color=colors, width=0.55)
     ax1.set_xticks(x)
-    ax1.set_xticklabels(keys, fontsize=10, rotation=15, ha="right")
+    ax1.set_xticklabels(keys, fontsize=10, rotation=22, ha="right")
     ax1.set_title("Speed: text read per second", fontsize=_BIG)
     ax1.set_ylabel("tokens / second", fontsize=_MED)
     ax1.annotate("higher = faster", xy=(0.98, 0.06), xycoords="axes fraction",
@@ -466,7 +468,7 @@ def plot_comparison_efficiency(summaries: List[dict], out_path: str) -> str:
     ax1.grid(axis="y", alpha=0.25)
     ax2.bar(x, mems, color=colors, width=0.55)
     ax2.set_xticks(x)
-    ax2.set_xticklabels(keys, fontsize=10, rotation=15, ha="right")
+    ax2.set_xticklabels(keys, fontsize=10, rotation=22, ha="right")
     ax2.set_title("Memory: GPU memory needed", fontsize=_BIG)
     ax2.set_ylabel("megabytes of GPU memory", fontsize=_MED)
     ax2.annotate("lower = less memory", xy=(0.98, 0.06),
@@ -474,7 +476,7 @@ def plot_comparison_efficiency(summaries: List[dict], out_path: str) -> str:
                  color="#555555")
     ax2.grid(axis="y", alpha=0.25)
     fig.suptitle("Efficiency: what each recipe costs in speed and memory",
-                 fontsize=17, y=1.02)
+                 fontsize=17, y=1.03)
     fig.tight_layout()
     return _save(fig, out_path)
 
@@ -553,7 +555,9 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
     n = len(order)
     cols = 2 if n <= 6 else 3
     rows = math.ceil(n / cols)
-    fig = plt.figure(figsize=(6.2 * cols, 4.6 * rows))
+    # Generous cell size: long group labels must never collide with the
+    # numbers below them.
+    fig = plt.figure(figsize=(6.8 * cols, 5.0 * rows))
     gs = fig.add_gridspec(rows, cols)
     vals = [_mean(groups[k], "best_val_loss") for k in order]
     # Winner set = every group at the best loss (tie-aware). The old single
@@ -573,7 +577,7 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
         win = i in win_indexes
         title_col = "#B8860B" if win else colors[i]
         ax.text(0.5, 0.86, _group_label(k, dims), ha="center", va="center",
-                fontsize=14, color=title_col, weight="bold")
+                fontsize=13, color=title_col, weight="bold")
         ppl = _mean(entries, "val_ppl")
         ax.text(0.5, 0.62, f"mistake level: {_mean(entries, 'best_val_loss'):.3f}",
                 ha="center", fontsize=13)
@@ -613,6 +617,243 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
     fig.text(0.5, 0.955, note, ha="center", fontsize=13, color="#555555")
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     return _save(fig, out_path)
+
+
+# --------------------------------------------------------------------------
+# 4. Evaluation-battery charts (from eval_report.json - ABLATION_PLAN sec 21)
+# --------------------------------------------------------------------------
+def _load_eval_reports(summaries: List[dict]) -> Dict[str, dict]:
+    """run_dir -> eval_report.json (only for runs that have one)."""
+    import json as _json
+    reports: Dict[str, dict] = {}
+    for s in summaries:
+        path = os.path.join(s["run_dir"], "eval_report.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    reports[s["run_dir"]] = _json.load(f)
+            except (OSError, ValueError):
+                continue
+    return reports
+
+
+def plot_few_shot_scaling(summaries: List[dict], out_path: str,
+                          dataset_name: str = "") -> Optional[str]:
+    """ICL curve: accuracy vs number of example shots (0 = zero-shot).
+
+    The line a layman wants to see: 'with no examples the model guessed
+    ~25% (chance), with 5 examples it got X right' - i.e. does the model
+    actually USE the pattern shown in context? Higher = better."""
+    reports = _load_eval_reports(summaries)
+    if not reports:
+        return None
+    dims, groups, order = _group_summaries(summaries)
+    colors = _group_colors(order, dims)
+    fig, ax = plt.subplots(figsize=(9.5, 5.8))
+    any_plotted = False
+    for i, k in enumerate(order):
+        entries = [e for e in groups[k] if e["run_dir"] in reports]
+        shot_values = None
+        for e in entries:
+            fs = reports[e["run_dir"]].get("few_shot", {})
+            if fs:
+                shot_values = fs
+                break
+        if not shot_values:
+            continue
+        shots = [int(kk) for kk in shot_values.keys()]
+        accs = [shot_values[str(kk)] for kk in shots]
+        ax.plot(shots, accs, marker="o", ms=7, lw=2, color=colors[i],
+                label=_group_label(k, dims))
+        any_plotted = True
+    if not any_plotted:
+        return None
+    ax.axhline(0.25, color="#BBBBBB", ls="--", lw=1.2)
+    ax.text(0.02, 0.27, "random guessing (1 of 4)", fontsize=10,
+            color="#888888")
+    ax.set_xlabel("examples shown in the prompt (shots)", fontsize=_MED)
+    ax.set_ylabel("accuracy at continuing the pattern", fontsize=_MED)
+    ax.set_title(f"Zero / one / few-shot learning on {dataset_name or 'the data'}",
+                 fontsize=_BIG, pad=12)
+    ax.annotate("higher = better", xy=(0.98, 0.06), xycoords="axes fraction",
+                ha="right", fontsize=_MED, color="#555555")
+    ax.set_ylim(0, 1.02)
+    ax.legend(fontsize=11, loc="upper center",
+              bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    return _save(fig, out_path)
+
+
+def plot_calibration(summaries: List[dict], out_path: str,
+                     dataset_name: str = "") -> Optional[str]:
+    """Trust-meter: ECE per variant with a plain-English reading guide.
+
+    ECE = gap between how sure the model SAYS it is and how often it is
+    actually right. Lower = more trustworthy; the guide panel explains the
+    scale without jargon."""
+    reports = _load_eval_reports(summaries)
+    if not reports:
+        return None
+    dims, groups, order = _group_summaries(summaries)
+    colors = _group_colors(order, dims)
+    plotted = []
+    for k in order:
+        for e in groups[k]:
+            rep = reports.get(e["run_dir"], {})
+            if rep.get("ece") is not None:
+                plotted.append((k, float(rep["ece"])))
+                break
+    if not plotted:
+        return None
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(13, 5.4))
+    ys = np.arange(len(plotted))[::-1]
+    ax.barh(ys, [v for _, v in plotted],
+            color=[colors[order.index(k)] for k, _ in plotted], height=0.55)
+    ax.set_yticks(ys)
+    ax.set_yticklabels([_group_label(k, dims) for k, _ in plotted],
+                       fontsize=10.5)
+    ax.set_xlabel("calibration error (ECE)", fontsize=_MED)
+    ax.set_title("Trust-meter: does confidence match\nactual accuracy?",
+                 fontsize=_BIG, pad=12)
+    ax.annotate("lower = more trustworthy", xy=(0.98, 0.06),
+                xycoords="axes fraction", ha="right", fontsize=_MED,
+                color="#555555")
+    for i2, (_, v) in enumerate(plotted):
+        ax.text(v + 0.002, ys[i2], f"{v:.3f}", va="center", fontsize=10)
+    ax.grid(axis="x", alpha=0.25)
+    ax2.axis("off")
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(0, 1)
+    ax2.text(0.5, 0.9, "How to read it", ha="center", fontsize=_BIG,
+             weight="bold", color="#0072B2")
+    lines = [
+        "0.00 - 0.05 : very trustworthy",
+        "0.05 - 0.15 : trustworthy",
+        "0.15 - 0.30 : noticeably overconfident",
+        "0.30 +      : confident but often wrong",
+        "",
+        "ECE measures the gap between how sure",
+        "the model SAYS it is and how often it",
+        "is actually right.",
+    ]
+    ax2.text(0.5, 0.62, "\n".join(lines), ha="center", va="top", fontsize=12,
+             color="#333333")
+    fig.suptitle(f"Calibration on {dataset_name or 'the data'}", fontsize=17,
+                 y=1.03)
+    fig.tight_layout()
+    return _save(fig, out_path)
+
+
+def plot_length_robustness(summaries: List[dict], out_path: str,
+                           dataset_name: str = "") -> Optional[str]:
+    """Loss by context-position bucket: the long-range penalty.
+
+    Four bars per variant = prediction quality at the START, early-middle,
+    late-middle and END of the context window. A rising staircase means
+    the model loses its grip at long range; a flat line means distance
+    doesn't hurt it."""
+    reports = _load_eval_reports(summaries)
+    if not reports:
+        return None
+    dims, groups, order = _group_summaries(summaries)
+    colors = _group_colors(order, dims)
+    buckets_names = ["start", "early\nmiddle", "late\nmiddle", "end"]
+    data = {}
+    for k in order:
+        for e in groups[k]:
+            rep = reports.get(e["run_dir"], {})
+            if "length_buckets" in rep:
+                data[k] = rep["length_buckets"]
+                break
+    if not data:
+        return None
+    fig, ax = plt.subplots(figsize=(10.5, 5.8))
+    n_buckets = len(next(iter(data.values())))
+    xs = np.arange(n_buckets)
+    width = 0.8 / max(len(data), 1)
+    for i, k in enumerate(order):
+        if k not in data:
+            continue
+        vals = data[k]
+        ax.bar(xs + (i - (len(data) - 1) / 2) * width, vals, width=width * 0.9,
+               color=colors[i], label=_group_label(k, dims))
+    ax.set_xticks(xs)
+    ax.set_xticklabels(buckets_names, fontsize=11)
+    ax.set_xlabel("position inside the context window", fontsize=_MED)
+    ax.set_ylabel("mistake level (loss)", fontsize=_MED)
+    ax.set_title(f"Long-range penalty on {dataset_name or 'the data'}: "
+                 "does the far end of the text stay readable?",
+                 fontsize=_BIG, pad=12)
+    ax.annotate("lower + flatter = better long memory", xy=(0.98, 0.06),
+                xycoords="axes fraction", ha="right", fontsize=_MED,
+                color="#555555")
+    ax.legend(fontsize=10.5, loc="upper center",
+              bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    return _save(fig, out_path)
+
+
+def plot_quality_vs_cost(summaries: List[dict], out_path: str,
+                         dataset_name: str = "") -> Optional[str]:
+    """Quality vs compute bill (ABLATION_PLAN section 21).
+
+    x = FLOPs spent training (tokens x flops/token), y = best val loss.
+    The winner is the point in the LOWER-LEFT: best quality per FLOP.
+    """
+    dims, groups, order = _group_summaries(summaries)
+    colors = _group_colors(order, dims)
+    fig, ax = plt.subplots(figsize=(9.5, 6))
+    any_plotted = False
+    for i, k in enumerate(order):
+        entries = groups[k]
+        flops = [e.get("tokens_seen", 0) * 6 * e.get("num_params", 0)
+                 for e in entries if e.get("num_params")]
+        losses = [e.get("best_val_loss") for e in entries if e.get("num_params")]
+        if not flops or not losses:
+            continue
+        ax.scatter(flops, losses, s=120, color=colors[i], zorder=5,
+                   label=_group_label(k, dims))
+        any_plotted = True
+    if not any_plotted:
+        return None
+    ax.set_xlabel("compute bill (FLOPs spent training)", fontsize=_MED)
+    ax.set_ylabel("mistake level (best validation loss)", fontsize=_MED)
+    ax.set_title(f"Quality vs compute on {dataset_name or 'the data'}: "
+                 "lower-left corner wins", fontsize=_BIG, pad=12)
+    ax.annotate("best value", xy=(0.02, 0.06), xycoords="axes fraction",
+                fontsize=_MED, color="#555555")
+    ax.legend(fontsize=11, loc="upper center",
+              bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    return _save(fig, out_path)
+
+
+def plot_eval_reports(summaries: List[dict], out_dir: str,
+                      dataset_name: str = "") -> Dict[str, str]:
+    """Render the evaluation-battery charts (05-08); skips gracefully when
+    runs have no eval_report.json yet (run scripts/evaluate.py first)."""
+    rendered = {}
+    jobs = {
+        "few_shot": (plot_few_shot_scaling,
+                     os.path.join(out_dir, "05_few_shot_learning.png")),
+        "calibration": (plot_calibration,
+                        os.path.join(out_dir, "06_trust_and_calibration.png")),
+        "length": (plot_length_robustness,
+                   os.path.join(out_dir, "07_long_range_memory.png")),
+        "cost": (plot_quality_vs_cost,
+                 os.path.join(out_dir, "08_quality_vs_cost.png")),
+    }
+    for name, (fn, path) in jobs.items():
+        try:
+            p = fn(summaries, path, dataset_name)
+            if p:
+                rendered[name] = p
+        except Exception:
+            continue  # one bad chart must never hide the others
+    return rendered
 
 
 def plot_all_comparisons(summaries: List[dict], out_dir: str,

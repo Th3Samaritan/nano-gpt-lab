@@ -35,15 +35,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="analyze finished runs")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--size", default=None)
+    parser.add_argument("--study", default=None,
+                        choices=["attention", "activation", "optimizer"],
+                        help="only runs of one study (keeps comparisons honest)")
     parser.add_argument("--seeds", nargs="+", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=2.0)
+    parser.add_argument("--evals", action="store_true",
+                        help="also render the evaluation-battery charts (05-08)")
     args = parser.parse_args()
 
-    report = analyze(args.dataset, args.size, args.seeds, args.threshold)
+    report = analyze(args.dataset, args.size, args.seeds, args.threshold,
+                     study=args.study, evals=args.evals)
     print(report["table"])
     print("\nlayman reports:")
     for name, path in sorted(report["plots"].items()):
         print(f"  {name:<12} -> {path}")
+    for name, path in sorted(report.get("evals", {}).items()):
+        print(f"  eval:{name:<7} -> {path}")
 
 
 if __name__ == "__main__":
