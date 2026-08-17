@@ -160,6 +160,44 @@ variables.
 
 ---
 
+## The three studies (ABLATION_PLAN.md)
+
+The lab now runs three controlled studies - one variable at a time, each
+with its own experiment configs and its own charts:
+
+| Study | Variable | Configs | Control |
+|---|---|---|---|
+| **A** attention × position | `attention`, `position` | `exp_a_*`, `exp_b_*`, `exp_c_*`, `exp_d_*` | A1: vanilla+learned |
+| **B** activation / FFN | `activation` (+ `swiglu_matched`) | `exp_b1_gelu`, `exp_b2_relu`, `exp_b3_silu`, `exp_b4_swiglu_matched`, `exp_b4_swiglu_native` | B1: GELU |
+| **C** optimizer | `optimizer` (`adam` L2-coupled vs `adamw` decoupled) | `exp_c1_adam`, `exp_c2_adamw` | C2: AdamW |
+
+```bash
+python scripts/train.py --dataset shakespeare --study activation --steps 2000 --seeds 42
+python scripts/train.py --dataset shakespeare --study optimizer  --steps 2000 --seeds 42
+python scripts/train.py --dataset shakespeare --compare             # Study A
+```
+
+Study B fairness rule (ABLATION_PLAN section 5): SwiGLU is run TWICE -
+`swiglu_matched=true` sets the FFN width so its weight count matches the
+GELU baseline (isolates the GATE), `swiglu_matched=false` uses the
+conventional LLaMA width (shows the cost of the native architecture).
+
+Study C first-principles: `src/training/optimizer.py` contains explicit
+reference implementations (`AdamReference`, `AdamWReference`) whose update
+equations - moments, bias correction, coupled vs decoupled decay - are
+validated against torch in `tests/test_optimizers.py`. The production path
+stays torch-native; the math is written down and tested.
+
+The chart engine auto-adapts: it groups runs by whichever dimensions
+actually vary (attention/position for Study A, activation for Study B,
+optimizer for Study C), so the same four layman charts work for every
+study. Multi-seed runs plot mean ± std (ABLATION_PLAN section 21).
+
+Every run also reports full parameter accounting (ABLATION_PLAN section
+15): total / trainable / embedding / attention / FFN / LM-head / norm.
+
+---
+
 ## The layman report suite
 
 `scripts/analyze.py` (or the last cell of the runner notebook) produces

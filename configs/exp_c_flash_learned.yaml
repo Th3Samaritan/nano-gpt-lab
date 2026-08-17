@@ -12,7 +12,12 @@ attention: flash_fused       # flash_tiled | flash_fused
 position: learned
 flash_tile_size: 64          # tile size when running flash_tiled
 
-# ---- shared training recipe (identical across A/B/C/D) ---------------
+# ---- Study B/C variables held at the canonical baseline -------------
+activation: gelu             # B1 baseline; varies only in the B series
+swiglu_matched: true        # SwiGLU fairness: param-matched width
+optimizer: adamw             # C2 baseline; varies only in the C series
+
+# ---- shared training recipe (identical across experiments) ---------
 dropout: 0.0
 bias: true
 weight_decay: 0.1

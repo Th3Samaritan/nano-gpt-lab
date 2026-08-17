@@ -1,0 +1,32 @@
+# ------------------------------------------------------------------
+# STUDY B1 - canonical baseline: GELU FFN (Study B control).
+# Attention + position + optimizer held at the canonical baseline
+# (vanilla + learned + AdamW). The activation is the ONLY variable.
+# ------------------------------------------------------------------
+experiment: B1
+label: "GELU baseline"
+
+# ---- Study A variables held at the canonical baseline ---------------
+attention: vanilla
+position: learned
+
+# ---- Study B variable ------------------------------------------------
+activation: gelu
+swiglu_matched: true
+
+# ---- Study C variable held at the canonical baseline -----------------
+optimizer: adamw
+
+# ---- shared training recipe (identical across all experiments) --------
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

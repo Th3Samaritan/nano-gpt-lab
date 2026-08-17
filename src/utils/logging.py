@@ -74,23 +74,35 @@ def plot_loss_curves(run_dir: str, out_path: str | None = None) -> str | None:
     csv_path = os.path.join(run_dir, "metrics.csv")
     if not os.path.exists(csv_path):
         return None
-    steps, tokens, train_l, val_l = [], [], [], []
+    # Parse per-field, per-row: the final evaluation row carries val_loss
+    # but no train_loss, so the two curves are tracked with SEPARATE token
+    # axes. (A single shared list would either crash with mismatched
+    # lengths or drop valid points - each field must stand alone.)
+    t_tok, t_loss, v_tok, v_loss = [], [], [], []
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                steps.append(int(row["step"]))
-                tokens.append(int(row["tokens_seen"]))
-                train_l.append(float(row["train_loss"]))
-                val_l.append(float(row["val_loss"]))
+                tok = int(row["tokens_seen"])
             except (ValueError, KeyError):
                 continue
-    if not steps:
+            try:
+                t_loss.append(float(row["train_loss"]))
+                t_tok.append(tok)
+            except (ValueError, KeyError):
+                pass
+            try:
+                v_loss.append(float(row["val_loss"]))
+                v_tok.append(tok)
+            except (ValueError, KeyError):
+                pass
+    if not v_tok:
         return None
     if out_path is None:
         out_path = os.path.join(run_dir, "loss_curves.png")
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(tokens, train_l, label="train loss")
-    ax.plot(tokens, val_l, label="val loss")
+    if t_tok:
+        ax.plot(t_tok, t_loss, label="train loss")
+    ax.plot(v_tok, v_loss, label="val loss")
     ax.set_xlabel("tokens seen")
     ax.set_ylabel("loss")
     ax.set_title("loss curves (x = tokens, so variants are comparable)")

@@ -23,6 +23,7 @@ PNG files saved next to the data they describe.
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Dict, List, Optional
 
@@ -70,6 +71,95 @@ def _label_of(key: str) -> str:
     return VARIANT_LABELS.get(key, key.replace("_", " + "))
 
 
+# --------------------------------------------------------------------------
+# Study-dimension grouping (ABLATION_PLAN: three studies, one chart engine)
+# --------------------------------------------------------------------------
+# The five variables a run can differ in. The collected set of runs
+# determines WHICH ones are plotted: charts auto-adapt to Study A
+# (attention/position), Study B (activation), or Study C (optimizer).
+_STUDY_DIMS = ["attention", "position", "activation", "swiglu_matched",
+               "optimizer"]
+
+_HUMAN = {
+    "position": {"learned": "position table", "rope": "RoPE",
+                 "none": "no position"},
+    "activation": {"gelu": "GELU", "relu": "ReLU", "silu": "SiLU",
+                   "swiglu": "SwiGLU"},
+}
+
+
+def _norm_value(s: dict, dim: str) -> str:
+    """Canonical string for one run's value of one study dimension."""
+    v = s.get(dim)
+    if dim == "attention" and str(v).startswith("flash"):
+        return "flash_fused"  # tiled/fused = same experimental cell
+    if dim == "swiglu_matched":
+        return str(bool(v))
+    return str(v)
+
+
+def _group_key(s: dict, dims: List[str]) -> tuple:
+    return tuple(_norm_value(s, d) for d in dims)
+
+
+def _group_label(key: tuple, dims: List[str]) -> str:
+    """Plain-English label for a group (used as chart labels)."""
+    parts = []
+    for dim, val in zip(dims, key):
+        if dim == "attention":
+            parts.append("Flash attention" if val.startswith("flash")
+                         else "Classic attention")
+        elif dim == "position":
+            parts.append(_HUMAN["position"].get(val, val))
+        elif dim == "activation":
+            parts.append(_HUMAN["activation"].get(val, val))
+        elif dim == "swiglu_matched":
+            parts.append("param-matched" if val == "True" else "native width")
+        elif dim == "optimizer":
+            parts.append("AdamW" if val == "adamw" else "Adam")
+    return " + ".join(parts) if parts else str(key)
+
+
+def _group_summaries(summaries: List[dict]):
+    """Group runs by the dimensions that actually vary; returns
+    (dims, groups, order). Runs sharing a group differ only by seed (or are
+    duplicates), so group aggregates are seed means."""
+    dims = [d for d in _STUDY_DIMS
+            if len({str(s.get(d)) for s in summaries}) > 1]
+    if not dims:
+        dims = ["attention", "position"]  # default: the classic A/B/C/D view
+    groups: Dict[tuple, List[dict]] = {}
+    order: List[tuple] = []
+    for s in summaries:
+        k = _group_key(s, dims)
+        if k not in groups:
+            groups[k] = []   # initialize BEFORE order so the pair is atomic
+            order.append(k)
+        groups[k].append(s)
+    return dims, groups, order
+
+
+def _mean(entries: List[dict], field: str) -> float:
+    vals = [e.get(field, 0.0) for e in entries if e.get(field) is not None]
+    return float(np.mean(vals)) if vals else 0.0
+
+
+def _group_colors(order: List[tuple], dims: List[str]) -> List[str]:
+    """Deterministic per-group colors: the fixed A/B/C/D palette when the
+    chart IS the attention study, else a fixed cycle of the same colors."""
+    palette = list(PALETTE.values())
+    colors = []
+    for i, key in enumerate(order):
+        if set(dims) == {"attention", "position"}:
+            attn = "flash" if key[dims.index("attention")].startswith("flash") \
+                else "vanilla"
+            pos = key[dims.index("position")]
+            colors.append(PALETTE.get(f"{attn}_{pos}", "#777777"))
+        else:
+            colors.append(palette[i % len(palette)])
+    return colors
+
+
 def _save(fig, path: str) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
@@ -86,23 +176,35 @@ def plot_loss_curves_layman(run_dir: str, out_path: Optional[str] = None) -> Opt
     if not os.path.exists(csv_path):
         return None
     import csv
-    tokens, train_l, val_l = [], [], []
+    # Per-field parse: the final evaluation row has val_loss but no
+    # train_loss, so each curve tracks its own token axis (shared lists
+    # would either crash on mismatched lengths or drop valid points).
+    t_tok, t_loss, v_tok, v_loss = [], [], [], []
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                tokens.append(int(row["tokens_seen"]))
-                train_l.append(float(row["train_loss"]))
-                val_l.append(float(row["val_loss"]))
+                tok = int(row["tokens_seen"])
             except (ValueError, KeyError):
                 continue
-    if not tokens:
+            try:
+                t_loss.append(float(row["train_loss"]))
+                t_tok.append(tok)
+            except (ValueError, KeyError):
+                pass
+            try:
+                v_loss.append(float(row["val_loss"]))
+                v_tok.append(tok)
+            except (ValueError, KeyError):
+                pass
+    if not v_tok:
         return None
     if out_path is None:
         out_path = os.path.join(run_dir, "learning_progress.png")
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.plot(tokens, train_l, color="#0072B2", lw=2.5,
-            label="learning curve (training)")
-    ax.plot(tokens, val_l, color="#D55E00", lw=2.5,
+    if t_tok:
+        ax.plot(t_tok, t_loss, color="#0072B2", lw=2.5,
+                label="learning curve (training)")
+    ax.plot(v_tok, v_loss, color="#D55E00", lw=2.5,
             label="checkup curve (unseen text)")
     ax.set_xlabel("amount of text read (tokens)", fontsize=_MED)
     ax.set_ylabel("mistake level (loss)", fontsize=_MED)
@@ -299,15 +401,26 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
     'Lower = better' printed ON the chart. Ties are REAL science here, not
     a display bug: flash == vanilla numerically, so B/D (or A/C) often tie
     EXACTLY - every tied bar gets a star, none is crowned arbitrarily.
+
+    Multiple seeds (ABLATION_PLAN section 21): bars become mean ± std over
+    seeds, so a 0.01 loss difference that is smaller than the seed spread
+    is visibly NOT a real difference.
     """
-    keys = [_variant_key(s) for s in summaries]
-    vals = [s.get("best_val_loss", s.get("final_val_loss", 0.0)) for s in summaries]
+    seeds = sorted({s["seed"] for s in summaries})
+    multi_seed = len(seeds) > 1
+    dims, groups, order = _group_summaries(summaries)
+    keys = [_group_label(k, dims) for k in order]
+    vals = [_mean(groups[k], "best_val_loss") for k in order]
+    stds = ([float(np.std([s.get("best_val_loss", 0.0) for s in groups[k]]))
+             for k in order] if multi_seed else None)
     fig, ax = plt.subplots(figsize=(10, 5.8))
     x = np.arange(len(vals))
-    colors = [_color_of(k) for k in keys]
-    bars = ax.bar(x, vals, color=colors, width=0.55)
-    # Winners = every variant at (or within 1e-9 of) the best loss. The
-    # previous single-argmin star silently picked the FIRST tied variant -
+    colors = _group_colors(order, dims)
+    bars = ax.bar(x, vals, yerr=stds if multi_seed else None, capsize=6,
+                  color=colors, width=0.55,
+                  error_kw={"ecolor": "#555555", "elinewidth": 1.5})
+    # Winners = every group at (or within 1e-9 of) the best loss. The
+    # previous single-argmin star silently picked the FIRST tied group -
     # which mislabelled flash+RoPE's exact tie with vanilla+RoPE.
     best_val = min(vals)
     winners = [i for i, v in enumerate(vals) if abs(v - best_val) < 1e-9]
@@ -318,10 +431,12 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
     ax.scatter([], [], marker="*", s=420, color="#FFD700",
                edgecolor="black", label=label)
     ax.set_xticks(x)
-    ax.set_xticklabels([_label_of(k) for k in keys], fontsize=11)
+    ax.set_xticklabels(keys, fontsize=11)
     ax.set_ylabel("mistake level (best validation loss)", fontsize=_MED)
-    ax.set_title(f"Which recipe learned {dataset_name or 'the text'} best?",
-                 fontsize=_BIG, pad=12)
+    title = f"Which recipe learned {dataset_name or 'the text'} best?"
+    if multi_seed:
+        title += f"\n(mean ± std over {len(seeds)} seeds)"
+    ax.set_title(title, fontsize=_BIG, pad=12)
     ax.annotate("lower = better", xy=(0.98, 0.06), xycoords="axes fraction",
                 ha="right", fontsize=_MED, color="#555555")
     for i, v in enumerate(vals):
@@ -333,23 +448,25 @@ def plot_comparison_quality(summaries: List[dict], out_path: str,
 
 
 def plot_comparison_efficiency(summaries: List[dict], out_path: str) -> str:
-    """Two bars per variant: speed (higher=better) and memory (lower=better)."""
-    keys = [_variant_key(s) for s in summaries]
-    speeds = [s.get("tokens_per_sec", 0.0) for s in summaries]
-    mems = [s.get("peak_gpu_mem_mb", 0.0) for s in summaries]
+    """Two bars per group: speed (higher=better) and memory (lower=better)."""
+    dims, groups, order = _group_summaries(summaries)
+    keys = [_group_label(k, dims) for k in order]
+    speeds = [_mean(groups[k], "tokens_per_sec") for k in order]
+    mems = [_mean(groups[k], "peak_gpu_mem_mb") for k in order]
+    colors = _group_colors(order, dims)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 5.2))
     x = np.arange(len(keys))
-    ax1.bar(x, speeds, color=[_color_of(k) for k in keys], width=0.55)
+    ax1.bar(x, speeds, color=colors, width=0.55)
     ax1.set_xticks(x)
-    ax1.set_xticklabels([VARIANT_SHORT[k] for k in keys], fontsize=13)
+    ax1.set_xticklabels(keys, fontsize=10, rotation=15, ha="right")
     ax1.set_title("Speed: text read per second", fontsize=_BIG)
     ax1.set_ylabel("tokens / second", fontsize=_MED)
     ax1.annotate("higher = faster", xy=(0.98, 0.06), xycoords="axes fraction",
                  ha="right", fontsize=_MED, color="#555555")
     ax1.grid(axis="y", alpha=0.25)
-    ax2.bar(x, mems, color=[_color_of(k) for k in keys], width=0.55)
+    ax2.bar(x, mems, color=colors, width=0.55)
     ax2.set_xticks(x)
-    ax2.set_xticklabels([VARIANT_SHORT[k] for k in keys], fontsize=13)
+    ax2.set_xticklabels(keys, fontsize=10, rotation=15, ha="right")
     ax2.set_title("Memory: GPU memory needed", fontsize=_BIG)
     ax2.set_ylabel("megabytes of GPU memory", fontsize=_MED)
     ax2.annotate("lower = less memory", xy=(0.98, 0.06),
@@ -367,38 +484,46 @@ def plot_convergence(summaries: List[dict], threshold: float, out_path: str,
     """Horizontal bars: tokens needed to reach a fixed loss threshold.
 
     Directly answers 'did RoPE reach the same quality with fewer tokens?'
-    in a way anyone can read: shorter bar = learned faster.
+    in a way anyone can read: shorter bar = learned faster. Multiple seeds
+    in a group are averaged; groups that never reached the threshold are
+    drawn grey.
     """
     import csv
-    keys, tokens_needed = [], []
-    for s in summaries:
-        csv_path = os.path.join(s["run_dir"], "metrics.csv")
-        reached = None
-        if os.path.exists(csv_path):
-            with open(csv_path, newline="", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    try:
-                        if float(row["val_loss"]) <= threshold:
-                            reached = int(row["tokens_seen"])
-                            break
-                    except (ValueError, KeyError):
-                        continue
-        keys.append(_variant_key(s))
-        tokens_needed.append(reached)
+    dims, groups, order = _group_summaries(summaries)
+    keys = [_group_label(k, dims) for k in order]
+    tokens_needed: List = []
+    for k in order:
+        reached_per_seed = []
+        for s in groups[k]:
+            csv_path = os.path.join(s["run_dir"], "metrics.csv")
+            reached = None
+            if os.path.exists(csv_path):
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        try:
+                            if float(row["val_loss"]) <= threshold:
+                                reached = int(row["tokens_seen"])
+                                break
+                        except (ValueError, KeyError):
+                            continue
+            if reached is not None:
+                reached_per_seed.append(reached)
+        tokens_needed.append(float(np.mean(reached_per_seed))
+                             if reached_per_seed else None)
+    colors = _group_colors(order, dims)
     fig, ax = plt.subplots(figsize=(10, 5))
     y = np.arange(len(keys))[::-1]
-    bars = []
     for i, (key, tok) in enumerate(zip(keys, tokens_needed)):
         if tok is None:
-            bars.append(ax.barh(y[i], 1.0, color="#BBBBBB"))
+            ax.barh(y[i], 1.0, color="#BBBBBB")
             ax.text(1.05, y[i], "did not reach it", va="center", fontsize=11,
                     color="#555555")
         else:
-            bars.append(ax.barh(y[i], tok, color=_color_of(key), height=0.6))
-            ax.text(tok * 1.01, y[i], f"{tok:,} tokens", va="center",
+            ax.barh(y[i], tok, color=colors[i], height=0.6)
+            ax.text(tok * 1.01, y[i], f"{tok:,.0f} tokens", va="center",
                     fontsize=11)
     ax.set_yticks(y)
-    ax.set_yticklabels([_label_of(k) for k in keys], fontsize=11)
+    ax.set_yticklabels(keys, fontsize=11)
     ax.set_xlabel("tokens read before reaching the goal", fontsize=_MED)
     ax.set_title(
         f"How much reading before reaching loss {threshold}?\n"
@@ -414,55 +539,52 @@ def plot_convergence(summaries: List[dict], threshold: float, out_path: str,
 
 def plot_verdict_card(summaries: List[dict], out_path: str,
                       dataset_name: str = "") -> str:
-    """THE poster: 2x2 matrix of the four recipes + winner headline.
+    """THE poster: one cell per study group + winner headline.
 
-    One glance answers: which recipe won, by how much, and why (its cell
-    shows quality + speed + memory numbers).
+    The grid adapts to however many groups the study has (4 for Study A,
+    5 for Study B, 2 for Study C). Each cell shows quality + speed +
+    memory numbers; ties are honoured (flash == vanilla numerically, so
+    exact ties are EXPECTED, never broken arbitrarily).
 
-    Ties are honoured: flash == vanilla numerically, so RoPE pairings
-    (B and D) frequently tie EXACTLY - both cells get the winner frame and
-    the subtitle explains that the flash version of the tie wins on
-    efficiency (speed/memory), not quality.
+    One glance answers: which recipe won, by how much, and why.
     """
-    by_key: Dict[str, dict] = {}
-    for s in summaries:
-        by_key[_variant_key(s)] = s
-    order = ["vanilla_learned", "vanilla_rope", "flash_learned", "flash_rope"]
-    fig = plt.figure(figsize=(12, 8.5))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1])
-    vals = [by_key[k].get("best_val_loss", 0.0) for k in order if k in by_key]
-    # Winner set = every variant at the best loss (tie-aware). The old
-    # single argmin crowned the first tied variant - misleading, because
-    # a flash/vanilla tie is the EXPECTED, exact behaviour.
-    win_keys: List[str] = []
+    dims, groups, order = _group_summaries(summaries)
+    colors = _group_colors(order, dims)
+    n = len(order)
+    cols = 2 if n <= 6 else 3
+    rows = math.ceil(n / cols)
+    fig = plt.figure(figsize=(6.2 * cols, 4.6 * rows))
+    gs = fig.add_gridspec(rows, cols)
+    vals = [_mean(groups[k], "best_val_loss") for k in order]
+    # Winner set = every group at the best loss (tie-aware). The old single
+    # argmin crowned the first tied group - misleading, because a
+    # flash/vanilla tie is the EXPECTED, exact behaviour.
+    win_indexes: List[int] = []
     if vals:
         best_val = min(vals)
-        win_keys = [k for k in order if k in by_key
-                    and abs(by_key[k].get("best_val_loss", 0.0) - best_val) < 1e-9]
-    tied = len(win_keys) > 1
-    for k, (row, col) in zip(order, [(0, 0), (0, 1), (1, 0), (1, 1)]):
-        ax = fig.add_subplot(gs[row, col])
-        entry = by_key.get(k)
+        win_indexes = [i for i, v in enumerate(vals)
+                       if abs(v - best_val) < 1e-9]
+    tied = len(win_indexes) > 1
+    for i, k in enumerate(order):
+        ax = fig.add_subplot(gs[i // cols, i % cols])
+        entries = groups[k]
         ax.axis("off")
         ax.set_facecolor("#F7F7F7")
-        if entry is None:
-            ax.text(0.5, 0.5, "not run yet", ha="center", va="center",
-                    fontsize=14, color="#999999")
-            continue
-        win = (k in win_keys)
-        title_col = "#B8860B" if win else _color_of(k)
-        ax.text(0.5, 0.86, _label_of(k), ha="center", va="center",
-                fontsize=15, color=title_col, weight="bold")
-        ppl = entry.get("val_ppl", 0.0)
-        ax.text(0.5, 0.62, f"mistake level: {entry.get('best_val_loss', 0.0):.3f}",
+        win = i in win_indexes
+        title_col = "#B8860B" if win else colors[i]
+        ax.text(0.5, 0.86, _group_label(k, dims), ha="center", va="center",
+                fontsize=14, color=title_col, weight="bold")
+        ppl = _mean(entries, "val_ppl")
+        ax.text(0.5, 0.62, f"mistake level: {_mean(entries, 'best_val_loss'):.3f}",
                 ha="center", fontsize=13)
         ax.text(0.5, 0.47,
                 f"~{ppl:.0f} choices per word", ha="center", fontsize=12,
                 color="#555555")
-        ax.text(0.5, 0.32, f"speed: {entry.get('tokens_per_sec', 0.0):,.0f} tok/s",
+        ax.text(0.5, 0.32,
+                f"speed: {_mean(entries, 'tokens_per_sec'):,.0f} tok/s",
                 ha="center", fontsize=12)
         ax.text(0.5, 0.20,
-                f"memory: {entry.get('peak_gpu_mem_mb', 0.0):,.0f} MB",
+                f"memory: {_mean(entries, 'peak_gpu_mem_mb'):,.0f} MB",
                 ha="center", fontsize=12)
         if win:
             ax.text(0.5, 0.05,
@@ -472,12 +594,15 @@ def plot_verdict_card(summaries: List[dict], out_path: str,
                 spine.set_color("#B8860B")
                 spine.set_linewidth(4)
     fig.suptitle(
-        f"The four recipes at a glance - {dataset_name or 'the text'}",
+        f"The recipes at a glance - {dataset_name or 'the text'}",
         fontsize=19, y=0.985)
     if tied:
-        flash_won = any("flash_" in k for k in win_keys)
-        vanilla_won = any("vanilla_" in k for k in win_keys)
-        if flash_won and vanilla_won:
+        win_groups = [order[i] for i in win_indexes]
+        # A tie that spans attention backends = flash ties classic by
+        # construction, and the flash version of the tie wins on cost.
+        attn_vals = {k[dims.index("attention")] for k in win_groups
+                     if "attention" in dims}
+        if len(attn_vals) > 1:
             note = ("Exact quality tie (flash = classic by construction). "
                     "The flash version of the tie wins on speed & memory.")
         else:

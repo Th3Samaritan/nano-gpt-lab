@@ -35,10 +35,28 @@ from src.utils.config import build_run_config  # noqa: E402
 from src.utils.environment import print_environment, sync_run_to_drive  # noqa: E402
 
 EXPERIMENTS = {
-    "exp_a_vanilla_learned": ("A", "vanilla", "learned"),
-    "exp_b_vanilla_rope": ("B", "vanilla", "rope"),
-    "exp_c_flash_learned": ("C", "flash_fused", "learned"),
-    "exp_d_flash_rope": ("D", "flash_fused", "rope"),
+    # Study A - attention x position (ABLATION_PLAN section 9)
+    "exp_a_vanilla_learned": ("A1", "vanilla", "learned"),
+    "exp_b_vanilla_rope": ("A2", "vanilla", "rope"),
+    "exp_c_flash_learned": ("A3", "flash_fused", "learned"),
+    "exp_d_flash_rope": ("A4", "flash_fused", "rope"),
+    # Study B - activation / FFN (held: vanilla+learned+adamw)
+    "exp_b1_gelu": ("B1", "vanilla", "learned"),
+    "exp_b2_relu": ("B2", "vanilla", "learned"),
+    "exp_b3_silu": ("B3", "vanilla", "learned"),
+    "exp_b4_swiglu_matched": ("B4a", "vanilla", "learned"),
+    "exp_b4_swiglu_native": ("B4b", "vanilla", "learned"),
+    # Study C - optimizer (held: vanilla+learned+gelu)
+    "exp_c1_adam": ("C1", "vanilla", "learned"),
+    "exp_c2_adamw": ("C2", "vanilla", "learned"),
+}
+
+STUDIES = {
+    "attention": ["exp_a_vanilla_learned", "exp_b_vanilla_rope",
+                  "exp_c_flash_learned", "exp_d_flash_rope"],
+    "activation": ["exp_b1_gelu", "exp_b2_relu", "exp_b3_silu",
+                   "exp_b4_swiglu_matched", "exp_b4_swiglu_native"],
+    "optimizer": ["exp_c1_adam", "exp_c2_adamw"],
 }
 
 
@@ -48,9 +66,12 @@ def main() -> None:
                         choices=["shakespeare", "tinystories", "openwebtext"])
     parser.add_argument("--exp", default=None,
                         choices=list(EXPERIMENTS),
-                        help="single experiment; omit with --compare")
+                        help="single experiment; omit with --compare/--study")
     parser.add_argument("--compare", action="store_true",
-                        help="run the full A/B/C/D matrix")
+                        help="run the Study A matrix (attention x position)")
+    parser.add_argument("--study", default=None,
+                        choices=list(STUDIES),
+                        help="run a full study group (attention|activation|optimizer)")
     parser.add_argument("--size", default=None,
                         choices=["nano", "small", "gpt2", "gpt3"],
                         help="model size preset (default: dataset's)")
@@ -67,9 +88,14 @@ def main() -> None:
     args = parser.parse_args()
 
     print_environment()
-    experiments = list(EXPERIMENTS) if args.compare else [args.exp]
-    if args.exp is None and not args.compare:
-        parser.error("provide --exp <name> or --compare")
+    if args.study:
+        experiments = STUDIES[args.study]
+    elif args.compare:
+        experiments = STUDIES["attention"]
+    else:
+        experiments = [args.exp]
+    if args.exp is None and not args.compare and not args.study:
+        parser.error("provide --exp <name>, --compare (Study A), or --study <group>")
 
     from src.utils.config import load_dataset_config
     resolved_size = args.size or load_dataset_config(args.dataset).get("size", "nano")
@@ -92,11 +118,12 @@ def main() -> None:
             summary = train(cfg, resume=args.resume)
             all_summaries.append(summary)
 
-    if len(all_summaries) > 1 or args.compare:
+    if len(all_summaries) > 1 or args.compare or args.study:
         from src.evaluation.analysis import render_layman_reports, \
             save_comparison_json, comparison_table
         from src.utils.environment import repo_root
-        out_dir = os.path.join(repo_root(), "results", args.dataset, resolved_size)
+        group = f"study_{args.study}" if args.study else resolved_size
+        out_dir = os.path.join(repo_root(), "results", args.dataset, group)
         save_comparison_json(all_summaries,
                              os.path.join(out_dir, "comparison.json"))
         render_layman_reports(all_summaries, args.dataset, out_dir,

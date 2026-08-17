@@ -1,0 +1,34 @@
+# ------------------------------------------------------------------
+# STUDY C1 - Adam (classic L2-style weight decay, COUPLED into the
+# gradient). Architecture held at the canonical baseline.
+# vs C2 this measures whether DECOUPLED decay (AdamW) matters at our
+# budget: with coupled decay the adaptive rates modulate the
+# regularization, which AdamW was invented to remove.
+# ------------------------------------------------------------------
+experiment: C1
+label: "Adam (coupled L2 decay)"
+
+# ---- Study A variables held at the canonical baseline ---------------
+attention: vanilla
+position: learned
+
+# ---- Study B variable held at the canonical baseline -----------------
+activation: gelu
+swiglu_matched: true
+
+# ---- Study C variable ------------------------------------------------
+optimizer: adam
+
+# ---- shared training recipe (identical across all experiments) --------
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

@@ -9,7 +9,12 @@ label: "Vanilla + Learned Position"
 attention: vanilla            # explicit QK^T matrix, softmax, AV
 position: learned             # wte + wpe table (GPT-2 baseline)
 
-# ---- shared training recipe (identical across A/B/C/D) ---------------
+# ---- Study B/C variables held at the canonical baseline -------------
+activation: gelu             # B1 baseline; varies only in the B series
+swiglu_matched: true        # SwiGLU fairness: param-matched width
+optimizer: adamw             # C2 baseline; varies only in the C series
+
+# ---- shared training recipe (identical across experiments) ---------
 # Architecture + batch/lr values come from the --size preset
 # (nano on the local machine, gpt2 on T4). These knobs are the SAME for every
 # experiment so they cannot explain any measured difference.

@@ -96,10 +96,18 @@ class TokenDataLoader:
 # Run directory + naming (plan section 22)
 # --------------------------------------------------------------------------
 def run_dir_for(config: dict) -> str:
-    """runs/{dataset}/{attention}_{position}_{size}_{seed}"""
+    """runs/{dataset}/{attention}_{position}_{activation}_{optimizer}_{size}_seed{seed}
+
+    ABLATION_PLAN section 19 naming: every architectural and training
+    variable is visible in the directory name, so a glance tells you which
+    study a run belongs to (attention/position = Study A, activation =
+    Study B, optimizer = Study C)."""
     return os.path.join(
         runs_dir(), config["dataset"],
-        f"{config['attention']}_{config['position']}_{config['size']}_seed{config['seed']}")
+        f"{config['attention']}_{config['position']}_"
+        f"{config.get('activation', 'gelu')}_"
+        f"{config.get('optimizer', 'adamw')}_"
+        f"{config['size']}_seed{config['seed']}")
 
 
 # --------------------------------------------------------------------------
@@ -168,6 +176,8 @@ def train(config: dict, resume: bool = False) -> dict:
         bias=config.get("bias", True),
         attention=config["attention"],
         position=config["position"],
+        activation=config.get("activation", "gelu"),
+        swiglu_matched=config.get("swiglu_matched", True),
         rope_base=config.get("rope_base", 10000.0),
         flash_tile_size=config.get("flash_tile_size", 64),
     )
@@ -178,9 +188,11 @@ def train(config: dict, resume: bool = False) -> dict:
 
     # ---- optimizer / scheduler / precision ------------------------------
     # Built from the BASE model before wrapping (see device_ids note above).
+    optimizer_name = config.get("optimizer", "adamw")  # Study C: adam|adamw
     optimizer = create_optimizer(
         model, config.get("weight_decay", 0.1),
-        config["learning_rate"], tuple(config.get("betas", [0.9, 0.95])), device)
+        config["learning_rate"], tuple(config.get("betas", [0.9, 0.95])),
+        device, optimizer=optimizer_name)
     scheduler = CosineWarmupScheduler(
         optimizer, config.get("warmup_steps", 100),
         config.get("decay_steps") or config["max_steps"],
@@ -210,7 +222,8 @@ def train(config: dict, resume: bool = False) -> dict:
     logger.log(
         f"micro_batch={micro} accum={accum} effective_tokens/step={eff_tokens} "
         f"precision={dtype or 'fp32'} device={device}"
-        f"{' x' + str(len(device_ids)) if len(device_ids) > 1 else ''}")
+        f"{' x' + str(len(device_ids)) if len(device_ids) > 1 else ''} "
+        f"optimizer={optimizer_name}")
 
     # ---- eval / sample parameters (identical for every variant) ---------
     eval_cfg = config.get("eval", {})

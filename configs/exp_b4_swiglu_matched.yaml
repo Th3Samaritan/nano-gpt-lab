@@ -1,0 +1,35 @@
+# ------------------------------------------------------------------
+# STUDY B4a - SwiGLU FFN, PARAMETER-MATCHED interpretation.
+# SwiGLU(x) = SiLU(xW_gate) ⊙ (xW_up), then output projection.
+# The gate makes this an ARCHITECTURAL change, not a scalar swap.
+# Fairness rule (ABLATION_PLAN section 5), interpretation 1:
+#   hidden width h = round(8n/3) so the FFN WEIGHT count (3nh) matches
+#   the GELU baseline (8n^2). Any gain here is the GATE, not the width.
+# ------------------------------------------------------------------
+experiment: B4a
+label: "SwiGLU (param-matched)"
+
+# ---- Study A variables held at the canonical baseline ---------------
+attention: vanilla
+position: learned
+
+# ---- Study B variable ------------------------------------------------
+activation: swiglu
+swiglu_matched: true
+
+# ---- Study C variable held at the canonical baseline -----------------
+optimizer: adamw
+
+# ---- shared training recipe (identical across all experiments) --------
+dropout: 0.0
+bias: true
+weight_decay: 0.1
+betas: [0.9, 0.95]
+grad_clip: 1.0
+warmup_steps: 100
+decay_steps: null
+eval_interval: 100
+eval_iters: 20
+checkpoint_interval: 500
+sample_interval: 500
+seed: 42

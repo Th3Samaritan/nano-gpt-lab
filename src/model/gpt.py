@@ -56,9 +56,14 @@ class GPTConfig:
     dropout: float = 0.0         # GPT-2 pretraining used 0.0; kept 0.0
     bias: bool = True            # Linear biases (GPT-2 had them)
 
-    # --- the two experimental variables --------------------------------
+    # --- the two experimental variables ----------------------------------
     attention: str = "vanilla"   # vanilla | flash_tiled | flash_fused
     position: str = "learned"    # learned | rope | none
+
+    # --- Study B variable: the FFN activation ----------------------------
+    activation: str = "gelu"     # gelu | relu | silu | swiglu
+    swiglu_matched: bool = True  # True: hidden width matched to GELU param
+                                 # count (fairness rule, ABLATION_PLAN sec 5)
 
     # --- RoPE / tiled-flash details ------------------------------------
     rope_base: float = 10000.0   # RoFormer's theta base
@@ -68,6 +73,7 @@ class GPTConfig:
         assert self.n_embd % self.n_head == 0, "n_embd must be divisible by n_head"
         assert self.attention in ("vanilla", "flash_tiled", "flash_fused")
         assert self.position in ("learned", "rope", "none")
+        assert self.activation in ("gelu", "relu", "silu", "swiglu")
 
     @property
     def head_dim(self) -> int:
@@ -236,6 +242,36 @@ class GPT(nn.Module):
                 n -= self.wpe.weight.numel()
         return n
 
+    def param_breakdown(self) -> dict:
+        """Parameter accounting per ABLATION_PLAN section 15:
+        total / trainable / embedding / attention / FFN / LM-head / other.
+
+        The LM head is weight-tied (wte), so it costs 0 extra parameters -
+        reported explicitly because section 15 demands every experiment
+        state its parameter story."""
+        counts = {"total": 0, "trainable": 0, "embedding": 0,
+                  "attention": 0, "ffn": 0, "lm_head": 0, "other": 0}
+
+        def add(module: nn.Module, bucket: str) -> None:
+            for p in module.parameters():
+                n = p.numel()
+                counts[bucket] += n
+                counts["total"] += n
+                if p.requires_grad:
+                    counts["trainable"] += n
+
+        add(self.wte, "embedding")
+        if self.wpe is not None:
+            add(self.wpe, "embedding")
+        for block in self.h:
+            add(block.attn, "attention")
+            add(block.mlp, "ffn")
+            for ln in (block.ln_1, block.ln_2):
+                add(ln, "other")
+        add(self.ln_f, "other")
+        # lm_head is wte itself: tied, zero extra parameters
+        return counts
+
     def flops_per_token(self) -> float:
         """Approx FLOPS per token: forward 2N, backward 4N -> 6N params."""
         return 6 * self.get_num_params(non_embedding=False)
@@ -243,10 +279,7 @@ class GPT(nn.Module):
     def model_summary(self) -> str:
         """Human-readable architecture summary saved into every run dir."""
         cfg = self.config
-        embed_params = self.wte.weight.numel()
-        if self.wpe is not None:
-            embed_params += self.wpe.weight.numel()
-        total = sum(p.numel() for p in self.parameters())
+        breakdown = self.param_breakdown()
         return "\n".join([
             f"model           : GPT decoder-only",
             f"layers          : {cfg.n_layer}",
@@ -256,10 +289,18 @@ class GPT(nn.Module):
             f"vocab size      : {cfg.vocab_size}",
             f"attention       : {cfg.attention}",
             f"position        : {cfg.position}",
+            f"activation      : {cfg.activation}"
+            + (" (param-matched)" if cfg.activation == "swiglu"
+               and cfg.swiglu_matched else
+               " (architecture-native)" if cfg.activation == "swiglu" else ""),
             f"dropout         : {cfg.dropout}",
             f"bias            : {cfg.bias}",
-            f"total params    : {total:,}",
-            f"embedding params: {embed_params:,}",
-            f"non-embed params: {total - embed_params:,}",
+            f"total params    : {breakdown['total']:,}",
+            f"trainable       : {breakdown['trainable']:,}",
+            f"embedding       : {breakdown['embedding']:,}",
+            f"attention       : {breakdown['attention']:,}",
+            f"FFN             : {breakdown['ffn']:,}",
+            f"LM head (tied)  : {breakdown['lm_head']:,} (shared with wte)",
+            f"norm/other      : {breakdown['other']:,}",
             f"flops/token     : ~{self.flops_per_token()/1e6:.1f} MFLOPs",
         ])
