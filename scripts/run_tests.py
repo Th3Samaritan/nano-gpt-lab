@@ -32,7 +32,8 @@ sys.path.insert(0, REPO_ROOT)  # makes `src` importable for the test files
 
 MODULES = [
     "test_attention", "test_rope", "test_tokenizer",
-    "test_transformer", "test_ffn", "test_optimizers", "test_overfit",
+    "test_transformer", "test_ffn", "test_optimizers", "test_logging",
+    "test_overfit",
 ]
 
 

@@ -299,7 +299,10 @@ def train(config: dict, resume: bool = False) -> dict:
                 f"val {val_loss:.3f} ppl {row['val_ppl']} | {tok_per_sec:.0f} "
                 f"tok/s | lr {scheduler.current_lr:.2e} | "
                 f"gpu {row['gpu_mem_mb']:.0f}MB | mfu {mfu*100:.1f}%")
-            plot_loss_curves(run_dir)
+            try:
+                plot_loss_curves(run_dir)
+            except Exception as exc:
+                logger.log(f"WARNING: loss-curve plot failed ({exc})")
             sync_run_to_drive(run_dir, full=False)
 
         # ---- periodic generation (fixed sampler settings) ----------------
@@ -340,9 +343,11 @@ def train(config: dict, resume: bool = False) -> dict:
         os.path.join(run_dir, "latest.pt"), base_gpt, optimizer, scheduler,
         precision, max_steps, tokens_seen, config, best_val_loss,
         is_best=(best_val_loss == val_loss))
-    plot_loss_curves(run_dir)
-    sync_run_to_drive(run_dir, full=True)
 
+    # ---- summary + plots: results FIRST, cosmetics LAST ------------------
+    # The summary is written before any plotting so a charting problem can
+    # NEVER lose the run's numbers (charts are regenerable from
+    # metrics.csv via analyze.py - training is not).
     summary = {
         "run_dir": run_dir,
         "experiment": config["experiment"],
@@ -366,4 +371,14 @@ def train(config: dict, resume: bool = False) -> dict:
     import json as _json
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
         _json.dump(summary, f, indent=2)
+
+    # Cosmetic artifacts are GUARDED: a plotting failure after a completed
+    # training run must log a warning, never raise (charts are regenerable
+    # from metrics.csv via analyze.py; the numbers above are the result).
+    try:
+        plot_loss_curves(run_dir)
+    except Exception as exc:
+        logger.log(f"WARNING: loss-curve plot failed ({exc}) - run analyze.py "
+                   f"to regenerate charts from metrics.csv")
+    sync_run_to_drive(run_dir, full=True)
     return summary
